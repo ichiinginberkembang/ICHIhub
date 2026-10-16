@@ -1,8 +1,7 @@
--- [[ VD TOOLS v3 — Multi-Feature Hub ]]
--- Fix: Speed Boot Infinite Loop
+-- [[ VD TOOLS v4 — Bolong Style UI + Speed Fix ]]
 
 local env = (getgenv and getgenv()) or _G
-for _, name in ipairs({"VDTools_v1", "VDTools_v2", "VDTools_v3", "SimpleESP_KillerSurvivor"}) do
+for _, name in ipairs({"VDTools_v1", "VDTools_v2", "VDTools_v3", "VDTools_v4", "SimpleESP_KillerSurvivor"}) do
     local old = env[name]
     if type(old) == "table" then
         old.running = false
@@ -40,20 +39,22 @@ local state = {
     antiAfkEnabled = true,
     speedMonitorConn = nil,
 }
-env.VDTools_v3 = state
+env.VDTools_v4 = state
 
-local COLORS = {
-    bg = Color3.fromRGB(28, 32, 42),
-    panel = Color3.fromRGB(38, 44, 58),
-    panelHover = Color3.fromRGB(48, 56, 72),
-    text = Color3.fromRGB(230, 235, 245),
-    textDim = Color3.fromRGB(150, 160, 180),
-    accent = Color3.fromRGB(120, 150, 220),
-    success = Color3.fromRGB(95, 200, 130),
-    danger = Color3.fromRGB(220, 100, 100),
-    warning = Color3.fromRGB(240, 180, 80),
-    divider = Color3.fromRGB(55, 62, 80),
-    border = Color3.fromRGB(70, 80, 105),
+-- ⭐ COLORS — Bolong Style (Dark Clean)
+local C = {
+    bg = Color3.fromRGB(14, 14, 18),           -- Background utama (hitam soft)
+    panel = Color3.fromRGB(22, 22, 28),        -- Panel
+    panelLight = Color3.fromRGB(30, 30, 38),   -- Panel lebih terang
+    sidebar = Color3.fromRGB(18, 18, 24),      -- Sidebar
+    hover = Color3.fromRGB(38, 38, 48),        -- Hover
+    text = Color3.fromRGB(240, 240, 245),      -- Text utama
+    textDim = Color3.fromRGB(140, 140, 155),   -- Text secondary
+    accent = Color3.fromRGB(120, 130, 200),    -- Accent (biru soft)
+    success = Color3.fromRGB(90, 200, 130),    -- Hijau
+    danger = Color3.fromRGB(220, 90, 90),      -- Merah
+    warning = Color3.fromRGB(240, 180, 80),    -- Kuning
+    divider = Color3.fromRGB(40, 40, 50),      -- Garis
 }
 
 local SETTINGS = {
@@ -84,19 +85,16 @@ local SETTINGS = {
 local function getRole(player)
     if state.manualKiller[player.Name] then return "killer" end
     if state.manualSurvivor[player.Name] then return "survivor" end
-    
     if player.Team then
-        local teamName = player.Team.Name:lower()
-        if teamName:find("killer") or teamName:find("murder") or teamName:find("hunter") then return "killer" end
-        if teamName:find("survivor") or teamName:find("innocent") or teamName:find("runner") then return "survivor" end
+        local tn = player.Team.Name:lower()
+        if tn:find("killer") or tn:find("murder") or tn:find("hunter") then return "killer" end
+        if tn:find("survivor") or tn:find("innocent") or tn:find("runner") then return "survivor" end
     end
-    
     if player.TeamColor then
         local color = player.TeamColor.Color
         if color.R > 0.6 and color.G < 0.4 then return "killer" end
         if color.B > 0.6 and color.R < 0.4 then return "survivor" end
     end
-    
     local ok, role = pcall(function()
         return player:GetAttribute("Role") or player:GetAttribute("role") or player:GetAttribute("Team")
     end)
@@ -105,7 +103,6 @@ local function getRole(player)
         if r:find("killer") or r:find("murder") then return "killer" end
         if r:find("survivor") or r:find("innocent") then return "survivor" end
     end
-    
     local char = player.Character
     if char then
         for _, child in ipairs(char:GetChildren()) do
@@ -145,7 +142,6 @@ end
 local function createESP(player)
     if player == LocalPlayer then return end
     if state.esps[player] then return end
-    
     local espData = {}
     
     local highlight = Instance.new("Highlight")
@@ -154,7 +150,6 @@ local function createESP(player)
     highlight.OutlineTransparency = 0
     highlight.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
     highlight.Parent = game:GetService("CoreGui") or LocalPlayer:WaitForChild("PlayerGui")
-    
     espData.Highlight = highlight
     
     local billboard = Instance.new("BillboardGui")
@@ -216,7 +211,6 @@ local function createESP(player)
     espData.NameLabel = nameLabel
     espData.DistanceLabel = distanceLabel
     espData.HealthLabel = healthLabel
-    
     state.esps[player] = espData
 end
 
@@ -227,71 +221,53 @@ local function updateESP()
         end
         return
     end
-    
     local myChar = LocalPlayer.Character
     local myHRP = myChar and myChar:FindFirstChild("HumanoidRootPart")
     local myPos = myHRP and myHRP.Position
     
     for _, player in ipairs(Players:GetPlayers()) do
         if player == LocalPlayer then continue end
-        
         local data = state.esps[player]
         if not data then
             createESP(player)
             data = state.esps[player]
             if not data then continue end
         end
-        
         local char = player.Character
         local hrp = char and char:FindFirstChild("HumanoidRootPart")
         local humanoid = char and char:FindFirstChildOfClass("Humanoid")
         
         if hrp and humanoid and humanoid.Health > 0 then
             local role = getRole(player)
-            
             if not shouldShow(role) then
                 data.Highlight.Enabled = false
                 data.Billboard.Enabled = false
                 continue
             end
-            
             local distance = 0
-            if myPos then
-                distance = math.floor((hrp.Position - myPos).Magnitude)
-            end
-            
+            if myPos then distance = math.floor((hrp.Position - myPos).Magnitude) end
             if distance > SETTINGS.MaxDistance then
                 data.Highlight.Enabled = false
                 data.Billboard.Enabled = false
             else
                 local color = getColor(role)
-                
                 data.Highlight.Enabled = SETTINGS.ShowBox
                 data.Highlight.Adornee = char
                 data.Highlight.FillColor = color
                 data.Highlight.OutlineColor = color
                 data.Highlight.FillTransparency = SETTINGS.FillTransparency
-                
                 data.Billboard.Enabled = true
                 data.Billboard.Adornee = hrp
-                
-                if role == "killer" then
-                    data.RoleLabel.Text = "KILLER"
-                elseif role == "survivor" then
-                    data.RoleLabel.Text = "SURVIVOR"
-                else
-                    data.RoleLabel.Text = "UNKNOWN"
-                end
+                if role == "killer" then data.RoleLabel.Text = "KILLER"
+                elseif role == "survivor" then data.RoleLabel.Text = "SURVIVOR"
+                else data.RoleLabel.Text = "UNKNOWN" end
                 data.RoleLabel.TextColor3 = color
                 data.RoleLabel.Visible = SETTINGS.ShowRole
-                
                 data.NameLabel.Text = player.Name
                 data.NameLabel.TextColor3 = color
                 data.NameLabel.Visible = SETTINGS.ShowName
-                
                 data.DistanceLabel.Text = distance .. "m"
                 data.DistanceLabel.Visible = SETTINGS.ShowDistance
-                
                 data.HealthLabel.Text = math.floor(humanoid.Health) .. " HP"
                 local hpPercent = humanoid.Health / humanoid.MaxHealth
                 data.HealthLabel.TextColor3 = Color3.fromRGB(255 * (1 - hpPercent), 255 * hpPercent, 100)
@@ -305,7 +281,7 @@ local function updateESP()
 end
 
 -- ═══════════════════════════════════════════════════════
--- SPEED BOOT (FIXED — ANTI LOOP)
+-- SPEED BOOT (FIXED STUTTER)
 -- ═══════════════════════════════════════════════════════
 
 local gameBaseSpeed = 16
@@ -342,22 +318,26 @@ local function applySpeedBoot()
     task.wait()
     isUpdatingSpeed = false
     
+    -- ⭐ MONITOR dengan threshold biar gak stutter
     state.speedMonitorConn = hum:GetPropertyChangedSignal("WalkSpeed"):Connect(function()
         if isUpdatingSpeed then return end
         if not SETTINGS.SpeedEnabled then return end
         if not hum or not hum.Parent then return end
         
         local current = hum.WalkSpeed
+        local expected = ourSetSpeed or gameBaseSpeed
         
-        if ourSetSpeed and math.abs(current - ourSetSpeed) < 0.01 then
+        -- ⭐ THRESHOLD: Skip kalau beda cuma dikit (< 3 studs/s)
+        -- Ini biar animasi lari / minor game update gak ganggu
+        if math.abs(current - expected) < 3 then
             return
         end
         
+        -- Cuma update kalau BEDA SIGNIFIKAN (slow perk, freeze, dll)
         gameBaseSpeed = current
-        
         local newSpeed = gameBaseSpeed * SETTINGS.SpeedMultiplier
         
-        if math.abs(newSpeed - current) < 0.01 then
+        if math.abs(newSpeed - current) < 0.5 then
             ourSetSpeed = current
             return
         end
@@ -375,11 +355,7 @@ local function initSpeedBoot()
     if not char then return end
     local hum = char:FindFirstChildOfClass("Humanoid")
     if not hum then return end
-    
-    if not SETTINGS.SpeedEnabled then
-        gameBaseSpeed = hum.WalkSpeed
-    end
-    
+    if not SETTINGS.SpeedEnabled then gameBaseSpeed = hum.WalkSpeed end
     applySpeedBoot()
 end
 
@@ -388,10 +364,8 @@ local function applyPlayerMods()
     if not char then return end
     local humanoid = char:FindFirstChildOfClass("Humanoid")
     if not humanoid then return end
-    
     humanoid.JumpPower = SETTINGS.JumpPower
     humanoid.UseJumpPower = true
-    
     initSpeedBoot()
 end
 
@@ -416,7 +390,6 @@ local function applyLagFixes()
             end
         end
     end
-    
     for _, obj in ipairs(workspace:GetDescendants()) do
         if lagFixes.RemoveDecals and obj:IsA("Decal") then
             pcall(function() obj.Transparency = 1 end)
@@ -425,15 +398,8 @@ local function applyLagFixes()
             pcall(function() obj.Transparency = 1 end)
         end
     end
-    
-    if lagFixes.DisableShadows then
-        Lighting.GlobalShadows = false
-    end
-    
-    if lagFixes.LimitRenderDistance and Camera then
-        Camera.FarPlane = 200
-    end
-    
+    if lagFixes.DisableShadows then Lighting.GlobalShadows = false end
+    if lagFixes.LimitRenderDistance and Camera then Camera.FarPlane = 200 end
     if lagFixes.ReduceTerrain then
         pcall(function()
             workspace.Terrain.WaterWaveSize = 0
@@ -497,7 +463,7 @@ task.spawn(function()
 end)
 
 -- ═══════════════════════════════════════════════════════
--- GUI
+-- GUI — BOLONG STYLE
 -- ═══════════════════════════════════════════════════════
 
 local playerGui = LocalPlayer:WaitForChild("PlayerGui")
@@ -511,398 +477,457 @@ MainGui.DisplayOrder = 1000
 MainGui.Parent = playerGui
 state.guis[#state.guis+1] = MainGui
 
+-- Main Window
 local MainFrame = Instance.new("Frame")
-MainFrame.Size = UDim2.fromOffset(240, 340)
-MainFrame.Position = UDim2.fromOffset(16, 80)
-MainFrame.BackgroundColor3 = COLORS.bg
-MainFrame.BackgroundTransparency = 0.05
+MainFrame.Size = UDim2.fromOffset(420, 260)
+MainFrame.Position = UDim2.fromOffset(40, 80)
+MainFrame.BackgroundColor3 = C.bg
 MainFrame.BorderSizePixel = 0
 MainFrame.Active = true
 MainFrame.Draggable = true
 MainFrame.Parent = MainGui
 
 local MFC = Instance.new("UICorner")
-MFC.CornerRadius = UDim.new(0, 12)
+MFC.CornerRadius = UDim.new(0, 10)
 MFC.Parent = MainFrame
 
 local MFB = Instance.new("UIStroke")
-MFB.Color = COLORS.border
+MFB.Color = C.divider
 MFB.Thickness = 1
-MFB.Transparency = 0.5
+MFB.Transparency = 0.3
 MFB.Parent = MainFrame
 
+-- Header (top bar)
 local Header = Instance.new("Frame")
 Header.Size = UDim2.new(1, 0, 0, 30)
-Header.BackgroundColor3 = COLORS.panel
+Header.BackgroundColor3 = C.panel
 Header.BorderSizePixel = 0
 Header.Parent = MainFrame
 
 local HC = Instance.new("UICorner")
-HC.CornerRadius = UDim.new(0, 12)
+HC.CornerRadius = UDim.new(0, 10)
 HC.Parent = Header
 
 local HeaderFix = Instance.new("Frame")
 HeaderFix.Size = UDim2.new(1, 0, 0, 15)
 HeaderFix.Position = UDim2.new(0, 0, 1, -15)
-HeaderFix.BackgroundColor3 = COLORS.panel
+HeaderFix.BackgroundColor3 = C.panel
 HeaderFix.BorderSizePixel = 0
 HeaderFix.Parent = Header
 
+-- Logo icon
+local LogoIcon = Instance.new("Frame")
+LogoIcon.Size = UDim2.fromOffset(20, 20)
+LogoIcon.Position = UDim2.fromOffset(10, 5)
+LogoIcon.BackgroundColor3 = C.accent
+LogoIcon.BorderSizePixel = 0
+LogoIcon.Parent = Header
+
+local LIC = Instance.new("UICorner")
+LIC.CornerRadius = UDim.new(0, 4)
+LIC.Parent = LogoIcon
+
+local LogoText = Instance.new("TextLabel")
+LogoText.Size = UDim2.new(1, 0, 1, 0)
+LogoText.BackgroundTransparency = 1
+LogoText.Text = "V"
+LogoText.TextColor3 = Color3.fromRGB(255, 255, 255)
+LogoText.TextSize = 11
+LogoText.Font = Enum.Font.GothamBold
+LogoText.Parent = LogoIcon
+
 local HeaderTitle = Instance.new("TextLabel")
-HeaderTitle.Size = UDim2.new(1, -50, 1, 0)
-HeaderTitle.Position = UDim2.fromOffset(14, 0)
+HeaderTitle.Size = UDim2.new(0, 200, 1, 0)
+HeaderTitle.Position = UDim2.fromOffset(38, 0)
 HeaderTitle.BackgroundTransparency = 1
-HeaderTitle.Text = "VD TOOLS v3"
-HeaderTitle.TextColor3 = COLORS.text
-HeaderTitle.TextSize = 13
+HeaderTitle.Text = "VD TOOLS  |  v4"
+HeaderTitle.TextColor3 = C.text
+HeaderTitle.TextSize = 11
 HeaderTitle.Font = Enum.Font.GothamBold
 HeaderTitle.TextXAlignment = Enum.TextXAlignment.Left
 HeaderTitle.Parent = Header
 
-local HideBtn = Instance.new("TextButton")
-HideBtn.Size = UDim2.fromOffset(20, 20)
-HideBtn.Position = UDim2.new(1, -26, 0.5, -10)
-HideBtn.BackgroundColor3 = COLORS.panelHover
-HideBtn.BackgroundTransparency = 0.3
-HideBtn.BorderSizePixel = 0
-HideBtn.Text = "−"
-HideBtn.TextColor3 = COLORS.textDim
-HideBtn.TextSize = 14
-HideBtn.Font = Enum.Font.GothamBold
-HideBtn.Parent = Header
+-- Window buttons
+local MinimizeBtn = Instance.new("TextButton")
+MinimizeBtn.Size = UDim2.fromOffset(20, 20)
+MinimizeBtn.Position = UDim2.new(1, -60, 0.5, -10)
+MinimizeBtn.BackgroundColor3 = C.panelLight
+MinimizeBtn.BackgroundTransparency = 0.5
+MinimizeBtn.BorderSizePixel = 0
+MinimizeBtn.Text = "−"
+MinimizeBtn.TextColor3 = C.textDim
+MinimizeBtn.TextSize = 13
+MinimizeBtn.Font = Enum.Font.GothamBold
+MinimizeBtn.Parent = Header
 
-local HBC = Instance.new("UICorner")
-HBC.CornerRadius = UDim.new(1, 0)
-HBC.Parent = HideBtn
+local MNC = Instance.new("UICorner")
+MNC.CornerRadius = UDim.new(1, 0)
+MNC.Parent = MinimizeBtn
 
-local TabRow = Instance.new("Frame")
-TabRow.Size = UDim2.new(1, -16, 0, 28)
-TabRow.Position = UDim2.fromOffset(8, 36)
-TabRow.BackgroundColor3 = COLORS.panel
-TabRow.BackgroundTransparency = 0.4
-TabRow.BorderSizePixel = 0
-TabRow.Parent = MainFrame
+local CloseBtn = Instance.new("TextButton")
+CloseBtn.Size = UDim2.fromOffset(20, 20)
+CloseBtn.Position = UDim2.new(1, -30, 0.5, -10)
+CloseBtn.BackgroundColor3 = C.danger
+CloseBtn.BackgroundTransparency = 0.3
+CloseBtn.BorderSizePixel = 0
+CloseBtn.Text = "X"
+CloseBtn.TextColor3 = C.text
+CloseBtn.TextSize = 10
+CloseBtn.Font = Enum.Font.GothamBold
+CloseBtn.Parent = Header
 
-local TRC = Instance.new("UICorner")
-TRC.CornerRadius = UDim.new(0, 8)
-TRC.Parent = TabRow
+local CBC = Instance.new("UICorner")
+CBC.CornerRadius = UDim.new(1, 0)
+CBC.Parent = CloseBtn
 
-local tabs = {"ESP", "LAG", "PLAYER", "MISC"}
-local tabBtns = {}
-local currentTab = "ESP"
+-- Body
+local Body = Instance.new("Frame")
+Body.Size = UDim2.new(1, 0, 1, -30)
+Body.Position = UDim2.new(0, 0, 0, 30)
+Body.BackgroundTransparency = 1
+Body.Parent = MainFrame
 
-local ContentFrame = Instance.new("Frame")
-ContentFrame.Size = UDim2.new(1, -16, 1, -108)
-ContentFrame.Position = UDim2.fromOffset(8, 70)
-ContentFrame.BackgroundColor3 = COLORS.panel
-ContentFrame.BackgroundTransparency = 0.4
-ContentFrame.BorderSizePixel = 0
-ContentFrame.Parent = MainFrame
+-- Search bar
+local SearchFrame = Instance.new("Frame")
+SearchFrame.Size = UDim2.new(0, 160, 0, 26)
+SearchFrame.Position = UDim2.fromOffset(12, 12)
+SearchFrame.BackgroundColor3 = C.panel
+SearchFrame.BorderSizePixel = 0
+SearchFrame.Parent = Body
 
-local CFC = Instance.new("UICorner")
-CFC.CornerRadius = UDim.new(0, 8)
-CFC.Parent = ContentFrame
+local SFC = Instance.new("UICorner")
+SFC.CornerRadius = UDim.new(0, 6)
+SFC.Parent = SearchFrame
 
-local Scroll = Instance.new("ScrollingFrame")
-Scroll.Size = UDim2.new(1, -8, 1, -8)
-Scroll.Position = UDim2.fromOffset(4, 4)
-Scroll.BackgroundTransparency = 1
-Scroll.BorderSizePixel = 0
-Scroll.CanvasSize = UDim2.new(0, 0, 0, 500)
-Scroll.ScrollBarThickness = 3
-Scroll.ScrollBarImageColor3 = COLORS.accent
-Scroll.Parent = ContentFrame
+local SearchIcon = Instance.new("TextLabel")
+SearchIcon.Size = UDim2.fromOffset(20, 26)
+SearchIcon.Position = UDim2.fromOffset(6, 0)
+SearchIcon.BackgroundTransparency = 1
+SearchIcon.Text = "🔍"
+SearchIcon.TextColor3 = C.textDim
+SearchIcon.TextSize = 10
+SearchIcon.Font = Enum.Font.Gotham
+SearchIcon.Parent = SearchFrame
 
-local tabContents = {}
-for _, tabName in ipairs(tabs) do
+local SearchBox = Instance.new("TextBox")
+SearchBox.Size = UDim2.new(1, -30, 1, 0)
+SearchBox.Position = UDim2.fromOffset(28, 0)
+SearchBox.BackgroundTransparency = 1
+SearchBox.Text = ""
+SearchBox.PlaceholderText = "Search..."
+SearchBox.PlaceholderColor3 = C.textDim
+SearchBox.TextColor3 = C.text
+SearchBox.TextSize = 10
+SearchBox.Font = Enum.Font.Gotham
+SearchBox.TextXAlignment = Enum.TextXAlignment.Left
+SearchBox.ClearTextOnFocus = false
+SearchBox.Parent = SearchFrame
+
+-- Sidebar
+local Sidebar = Instance.new("Frame")
+Sidebar.Size = UDim2.new(0, 110, 1, -50)
+Sidebar.Position = UDim2.fromOffset(12, 50)
+Sidebar.BackgroundTransparency = 1
+Sidebar.Parent = Body
+
+-- Content Area
+local ContentArea = Instance.new("Frame")
+ContentArea.Size = UDim2.new(1, -140, 1, -50)
+ContentArea.Position = UDim2.fromOffset(128, 50)
+ContentArea.BackgroundColor3 = C.panel
+ContentArea.BorderSizePixel = 0
+ContentArea.Parent = Body
+
+local CAC = Instance.new("UICorner")
+CAC.CornerRadius = UDim.new(0, 8)
+CAC.Parent = ContentArea
+
+local ContentScroll = Instance.new("ScrollingFrame")
+ContentScroll.Size = UDim2.new(1, -10, 1, -10)
+ContentScroll.Position = UDim2.fromOffset(5, 5)
+ContentScroll.BackgroundTransparency = 1
+ContentScroll.BorderSizePixel = 0
+ContentScroll.CanvasSize = UDim2.new(0, 0, 0, 500)
+ContentScroll.ScrollBarThickness = 3
+ContentScroll.ScrollBarImageColor3 = C.accent
+ContentScroll.Parent = ContentArea
+
+-- Sidebar categories
+local categories = {
+    {name = "ESP", icon = "👁", id = "esp"},
+    {name = "Lag Fix", icon = "⚡", id = "lag"},
+    {name = "Player", icon = "🏃", id = "player"},
+    {name = "Misc", icon = "⚙", id = "misc"},
+}
+
+local sidebarBtns = {}
+local currentCat = "esp"
+
+-- Content containers
+local catContents = {}
+for _, cat in ipairs(categories) do
     local frame = Instance.new("Frame")
     frame.Size = UDim2.new(1, 0, 0, 500)
     frame.BackgroundTransparency = 1
-    frame.Visible = (tabName == currentTab)
-    frame.Parent = Scroll
-    tabContents[tabName] = frame
+    frame.Visible = (cat.id == currentCat)
+    frame.Parent = ContentScroll
+    catContents[cat.id] = frame
 end
 
-for i, tabName in ipairs(tabs) do
+-- Sidebar buttons
+for i, cat in ipairs(categories) do
     local btn = Instance.new("TextButton")
-    btn.Size = UDim2.new(1/#tabs, -2, 1, -4)
-    btn.Position = UDim2.new((i-1)/#tabs, 1, 0, 2)
-    btn.BackgroundColor3 = (tabName == currentTab) and COLORS.accent or COLORS.panel
-    btn.BackgroundTransparency = (tabName == currentTab) and 0.1 or 0.6
+    btn.Size = UDim2.new(1, 0, 0, 30)
+    btn.Position = UDim2.fromOffset(0, (i-1) * 34)
+    btn.BackgroundColor3 = (cat.id == currentCat) and C.panelLight or C.sidebar
+    btn.BackgroundTransparency = (cat.id == currentCat) and 0.2 or 0.5
     btn.BorderSizePixel = 0
-    btn.Text = tabName
-    btn.TextColor3 = (tabName == currentTab) and COLORS.text or COLORS.textDim
-    btn.TextSize = 9
-    btn.Font = Enum.Font.GothamBold
-    btn.Parent = TabRow
+    btn.Text = ""
+    btn.Parent = Sidebar
     
     local c = Instance.new("UICorner")
     c.CornerRadius = UDim.new(0, 6)
     c.Parent = btn
     
-    tabBtns[tabName] = btn
+    local icon = Instance.new("TextLabel")
+    icon.Size = UDim2.fromOffset(24, 30)
+    icon.Position = UDim2.fromOffset(4, 0)
+    icon.BackgroundTransparency = 1
+    icon.Text = cat.icon
+    icon.TextColor3 = (cat.id == currentCat) and C.accent or C.textDim
+    icon.TextSize = 12
+    icon.Font = Enum.Font.Gotham
+    icon.Parent = btn
+    
+    local label = Instance.new("TextLabel")
+    label.Size = UDim2.new(1, -30, 1, 0)
+    label.Position = UDim2.fromOffset(28, 0)
+    label.BackgroundTransparency = 1
+    label.Text = cat.name
+    label.TextColor3 = (cat.id == currentCat) and C.text or C.textDim
+    label.TextSize = 10
+    label.Font = Enum.Font.GothamBold
+    label.TextXAlignment = Enum.TextXAlignment.Left
+    label.Parent = btn
+    
+    sidebarBtns[cat.id] = {btn = btn, icon = icon, label = label}
     
     btn.MouseButton1Click:Connect(function()
-        currentTab = tabName
-        for tn, tb in pairs(tabBtns) do
-            if tn == tabName then
-                tb.BackgroundColor3 = COLORS.accent
-                tb.BackgroundTransparency = 0.1
-                tb.TextColor3 = COLORS.text
-                tabContents[tn].Visible = true
+        currentCat = cat.id
+        for id, data in pairs(sidebarBtns) do
+            if id == cat.id then
+                data.btn.BackgroundColor3 = C.panelLight
+                data.btn.BackgroundTransparency = 0.2
+                data.icon.TextColor3 = C.accent
+                data.label.TextColor3 = C.text
+                catContents[id].Visible = true
             else
-                tb.BackgroundColor3 = COLORS.panel
-                tb.BackgroundTransparency = 0.6
-                tb.TextColor3 = COLORS.textDim
-                tabContents[tn].Visible = false
+                data.btn.BackgroundColor3 = C.sidebar
+                data.btn.BackgroundTransparency = 0.5
+                data.icon.TextColor3 = C.textDim
+                data.label.TextColor3 = C.textDim
+                catContents[id].Visible = false
             end
         end
-        Scroll.CanvasPosition = Vector2.new(0, 0)
+        ContentScroll.CanvasPosition = Vector2.new(0, 0)
     end)
 end
 
-local function makeToggle(parent, y, labelText, key, table, callback)
-    local container = Instance.new("Frame")
-    container.Size = UDim2.new(0.94, 0, 0, 30)
-    container.Position = UDim2.new(0.03, 0, 0, y)
-    container.BackgroundColor3 = COLORS.panel
-    container.BackgroundTransparency = 0.3
-    container.BorderSizePixel = 0
-    container.Parent = parent
+-- ⭐ ROW HELPER (list item ala Bolong)
+local function makeRow(parent, y, labelText, subText, callback)
+    local row = Instance.new("TextButton")
+    row.Size = UDim2.new(1, -10, 0, 38)
+    row.Position = UDim2.new(0, 5, 0, y)
+    row.BackgroundColor3 = C.panelLight
+    row.BackgroundTransparency = 0.3
+    row.BorderSizePixel = 0
+    row.Text = ""
+    row.Parent = parent
     
-    local c = Instance.new("UICorner")
-    c.CornerRadius = UDim.new(0, 8)
-    c.Parent = container
+    local rc = Instance.new("UICorner")
+    rc.CornerRadius = UDim.new(0, 6)
+    rc.Parent = row
     
     local label = Instance.new("TextLabel")
-    label.Size = UDim2.new(1, -60, 1, 0)
-    label.Position = UDim2.fromOffset(12, 0)
+    label.Size = UDim2.new(1, -50, 0, 18)
+    label.Position = UDim2.fromOffset(12, 3)
     label.BackgroundTransparency = 1
     label.Text = labelText
-    label.TextColor3 = COLORS.text
+    label.TextColor3 = C.text
     label.TextSize = 10
-    label.Font = Enum.Font.Gotham
+    label.Font = Enum.Font.GothamBold
     label.TextXAlignment = Enum.TextXAlignment.Left
-    label.Parent = container
+    label.Parent = row
     
-    local stateBtn = Instance.new("TextButton")
-    stateBtn.Size = UDim2.fromOffset(46, 20)
-    stateBtn.Position = UDim2.new(1, -54, 0.5, -10)
-    stateBtn.BackgroundColor3 = table[key] and COLORS.success or COLORS.divider
-    stateBtn.BackgroundTransparency = 0.15
-    stateBtn.BorderSizePixel = 0
-    stateBtn.Text = table[key] and "ON" or "OFF"
-    stateBtn.TextColor3 = COLORS.text
-    stateBtn.TextSize = 9
-    stateBtn.Font = Enum.Font.GothamBold
-    stateBtn.Parent = container
+    local sub = Instance.new("TextLabel")
+    sub.Size = UDim2.new(1, -50, 0, 14)
+    sub.Position = UDim2.fromOffset(12, 20)
+    sub.BackgroundTransparency = 1
+    sub.Text = subText or ""
+    sub.TextColor3 = C.textDim
+    sub.TextSize = 8
+    sub.Font = Enum.Font.Gotham
+    sub.TextXAlignment = Enum.TextXAlignment.Left
+    sub.Parent = row
     
-    local bc = Instance.new("UICorner")
-    bc.CornerRadius = UDim.new(0, 5)
-    bc.Parent = stateBtn
+    local arrow = Instance.new("TextLabel")
+    arrow.Size = UDim2.fromOffset(20, 38)
+    arrow.Position = UDim2.new(1, -24, 0, 0)
+    arrow.BackgroundTransparency = 1
+    arrow.Text = ">"
+    arrow.TextColor3 = C.textDim
+    arrow.TextSize = 12
+    arrow.Font = Enum.Font.GothamBold
+    arrow.Parent = row
     
-    stateBtn.MouseButton1Click:Connect(function()
-        table[key] = not table[key]
-        stateBtn.Text = table[key] and "ON" or "OFF"
-        stateBtn.BackgroundColor3 = table[key] and COLORS.success or COLORS.divider
-        if callback then pcall(callback) end
+    -- Status indicator (ON/OFF dot)
+    local statusDot = Instance.new("Frame")
+    statusDot.Size = UDim2.fromOffset(8, 8)
+    statusDot.Position = UDim2.new(1, -34, 0.5, -4)
+    statusDot.BackgroundColor3 = C.textDim
+    statusDot.BorderSizePixel = 0
+    statusDot.Parent = row
+    
+    local SDC = Instance.new("UICorner")
+    SDC.CornerRadius = UDim.new(1, 0)
+    SDC.Parent = statusDot
+    
+    row.MouseButton1Click:Connect(function()
+        if callback then callback(row, statusDot) end
     end)
     
-    return container
-end
-
-local function makeSlider(parent, y, labelText, min, max, default, callback)
-    local container = Instance.new("Frame")
-    container.Size = UDim2.new(0.94, 0, 0, 48)
-    container.Position = UDim2.new(0.03, 0, 0, y)
-    container.BackgroundColor3 = COLORS.panel
-    container.BackgroundTransparency = 0.3
-    container.BorderSizePixel = 0
-    container.Parent = parent
-    
-    local c = Instance.new("UICorner")
-    c.CornerRadius = UDim.new(0, 8)
-    c.Parent = container
-    
-    local label = Instance.new("TextLabel")
-    label.Size = UDim2.new(1, -20, 0, 16)
-    label.Position = UDim2.fromOffset(12, 4)
-    label.BackgroundTransparency = 1
-    label.Text = labelText .. ": " .. tostring(default)
-    label.TextColor3 = COLORS.text
-    label.TextSize = 10
-    label.Font = Enum.Font.Gotham
-    label.TextXAlignment = Enum.TextXAlignment.Left
-    label.Parent = container
-    
-    local sliderBg = Instance.new("Frame")
-    sliderBg.Size = UDim2.new(1, -24, 0, 6)
-    sliderBg.Position = UDim2.new(0, 12, 0, 26)
-    sliderBg.BackgroundColor3 = COLORS.divider
-    sliderBg.BorderSizePixel = 0
-    sliderBg.Parent = container
-    
-    local sbc = Instance.new("UICorner")
-    sbc.CornerRadius = UDim.new(1, 0)
-    sbc.Parent = sliderBg
-    
-    local fill = Instance.new("Frame")
-    fill.Size = UDim2.new((default - min) / (max - min), 0, 1, 0)
-    fill.BackgroundColor3 = COLORS.accent
-    fill.BorderSizePixel = 0
-    fill.Parent = sliderBg
-    
-    local fc = Instance.new("UICorner")
-    fc.CornerRadius = UDim.new(1, 0)
-    fc.Parent = fill
-    
-    local knob = Instance.new("TextButton")
-    knob.Size = UDim2.fromOffset(16, 16)
-    knob.Position = UDim2.new((default - min) / (max - min), -8, 0.5, -8)
-    knob.BackgroundColor3 = COLORS.text
-    knob.BorderSizePixel = 0
-    knob.Text = ""
-    knob.Parent = sliderBg
-    
-    local kc = Instance.new("UICorner")
-    kc.CornerRadius = UDim.new(1, 0)
-    kc.Parent = knob
-    
-    local dragging = false
-    local function updateFromInput(input)
-        local pos = sliderBg.AbsolutePosition.X
-        local size = sliderBg.AbsoluteSize.X
-        local percent = math.clamp((input.Position.X - pos) / size, 0, 1)
-        local value = math.floor(min + percent * (max - min))
-        fill.Size = UDim2.new(percent, 0, 1, 0)
-        knob.Position = UDim2.new(percent, -8, 0.5, -8)
-        label.Text = labelText .. ": " .. tostring(value)
-        if callback then pcall(callback, value) end
-    end
-    
-    knob.InputBegan:Connect(function(input)
-        if input.UserInputType == Enum.UserInputType.Touch or input.UserInputType == Enum.UserInputType.MouseButton1 then
-            dragging = true
-            updateFromInput(input)
-        end
-    end)
-    
-    sliderBg.InputBegan:Connect(function(input)
-        if input.UserInputType == Enum.UserInputType.Touch or input.UserInputType == Enum.UserInputType.MouseButton1 then
-            dragging = true
-            updateFromInput(input)
-        end
-    end)
-    
-    state.connections[#state.connections+1] = UserInputService.InputChanged:Connect(function(input)
-        if dragging and (input.UserInputType == Enum.UserInputType.Touch or input.UserInputType == Enum.UserInputType.MouseMovement) then
-            updateFromInput(input)
-        end
-    end)
-    
-    state.connections[#state.connections+1] = UserInputService.InputEnded:Connect(function(input)
-        if input.UserInputType == Enum.UserInputType.Touch or input.UserInputType == Enum.UserInputType.MouseButton1 then
-            dragging = false
-        end
-    end)
-    
-    return container
+    return {row = row, statusDot = statusDot}
 end
 
 -- ═══════════════════════════════════════════════════════
 -- TAB: ESP
 -- ═══════════════════════════════════════════════════════
 
-local espFrame = tabContents["ESP"]
+local espFrame = catContents["esp"]
+local espY = 5
 
-makeToggle(espFrame, 8, "ESP Aktif", "espEnabled", state, function()
+local espToggle = makeRow(espFrame, espY, "ESP Aktif", "Nampilin kotak & info pemain", function(row, dot)
+    state.espEnabled = not state.espEnabled
+    dot.BackgroundColor3 = state.espEnabled and C.success or C.textDim
     if state.espEnabled then
         for _, player in ipairs(Players:GetPlayers()) do
             if player ~= LocalPlayer then createESP(player) end
         end
     end
 end)
+espToggle.statusDot.BackgroundColor3 = state.espEnabled and C.success or C.textDim
+espY = espY + 42
 
-makeToggle(espFrame, 44, "Kotak Highlight", "ShowBox", SETTINGS)
-makeToggle(espFrame, 80, "Role (Killer/Survivor)", "ShowRole", SETTINGS)
-makeToggle(espFrame, 116, "Nama", "ShowName", SETTINGS)
-makeToggle(espFrame, 152, "Jarak", "ShowDistance", SETTINGS)
-makeToggle(espFrame, 188, "Darah (HP)", "ShowHealth", SETTINGS)
+local boxToggle = makeRow(espFrame, espY, "Kotak Highlight", "Warna kotak di pemain", function(row, dot)
+    SETTINGS.ShowBox = not SETTINGS.ShowBox
+    dot.BackgroundColor3 = SETTINGS.ShowBox and C.success or C.textDim
+end)
+boxToggle.statusDot.BackgroundColor3 = SETTINGS.ShowBox and C.success or C.textDim
+espY = espY + 42
 
-local filterLabel = Instance.new("TextLabel")
-filterLabel.Size = UDim2.new(0.94, 0, 0, 16)
-filterLabel.Position = UDim2.new(0.03, 0, 0, 228)
-filterLabel.BackgroundTransparency = 1
-filterLabel.Text = "FILTER ROLE"
-filterLabel.TextColor3 = COLORS.textDim
-filterLabel.TextSize = 9
-filterLabel.Font = Enum.Font.GothamBold
-filterLabel.TextXAlignment = Enum.TextXAlignment.Left
-filterLabel.Parent = espFrame
+local roleToggle = makeRow(espFrame, espY, "Role", "Tampilkan KILLER/SURVIVOR", function(row, dot)
+    SETTINGS.ShowRole = not SETTINGS.ShowRole
+    dot.BackgroundColor3 = SETTINGS.ShowRole and C.success or C.textDim
+end)
+roleToggle.statusDot.BackgroundColor3 = SETTINGS.ShowRole and C.success or C.textDim
+espY = espY + 42
+
+local nameToggle = makeRow(espFrame, espY, "Nama", "Tampilkan nama pemain", function(row, dot)
+    SETTINGS.ShowName = not SETTINGS.ShowName
+    dot.BackgroundColor3 = SETTINGS.ShowName and C.success or C.textDim
+end)
+nameToggle.statusDot.BackgroundColor3 = SETTINGS.ShowName and C.success or C.textDim
+espY = espY + 42
+
+local distToggle = makeRow(espFrame, espY, "Jarak", "Tampilkan jarak (meter)", function(row, dot)
+    SETTINGS.ShowDistance = not SETTINGS.ShowDistance
+    dot.BackgroundColor3 = SETTINGS.ShowDistance and C.success or C.textDim
+end)
+distToggle.statusDot.BackgroundColor3 = SETTINGS.ShowDistance and C.success or C.textDim
+espY = espY + 42
+
+local hpToggle = makeRow(espFrame, espY, "Darah", "Tampilkan HP pemain", function(row, dot)
+    SETTINGS.ShowHealth = not SETTINGS.ShowHealth
+    dot.BackgroundColor3 = SETTINGS.ShowHealth and C.success or C.textDim
+end)
+hpToggle.statusDot.BackgroundColor3 = SETTINGS.ShowHealth and C.success or C.textDim
+espY = espY + 48
+
+-- Filter label
+local filterLbl = Instance.new("TextLabel")
+filterLbl.Size = UDim2.new(1, -10, 0, 16)
+filterLbl.Position = UDim2.new(0, 5, 0, espY)
+filterLbl.BackgroundTransparency = 1
+filterLbl.Text = "FILTER ROLE"
+filterLbl.TextColor3 = C.textDim
+filterLbl.TextSize = 8
+filterLbl.Font = Enum.Font.GothamBold
+filterLbl.TextXAlignment = Enum.TextXAlignment.Left
+filterLbl.Parent = espFrame
+espY = espY + 20
 
 local filterBtns = {}
 local function updateFilterBtns()
     for role, btn in pairs(filterBtns) do
         if SETTINGS.FilterRole == role then
-            btn.BackgroundColor3 = COLORS.accent
-            btn.BackgroundTransparency = 0.1
-            btn.TextColor3 = COLORS.text
+            btn.BackgroundColor3 = C.accent
+            btn.BackgroundTransparency = 0.2
+            btn.TextColor3 = C.text
         else
-            btn.BackgroundColor3 = COLORS.panel
-            btn.BackgroundTransparency = 0.3
-            btn.TextColor3 = COLORS.textDim
+            btn.BackgroundColor3 = C.panelLight
+            btn.BackgroundTransparency = 0.5
+            btn.TextColor3 = C.textDim
         end
     end
 end
 
 local function makeFilterBtn(text, xPos, role)
     local btn = Instance.new("TextButton")
-    btn.Size = UDim2.new(0.29, 0, 0, 26)
-    btn.Position = UDim2.new(xPos, 0, 0, 250)
+    btn.Size = UDim2.new(0.31, 0, 0, 24)
+    btn.Position = UDim2.new(xPos, 0, 0, espY)
     btn.BorderSizePixel = 0
     btn.Text = text
-    btn.TextSize = 9
+    btn.TextSize = 8
     btn.Font = Enum.Font.GothamBold
     btn.Parent = espFrame
     
     local c = Instance.new("UICorner")
-    c.CornerRadius = UDim.new(0, 7)
+    c.CornerRadius = UDim.new(0, 5)
     c.Parent = btn
     
     filterBtns[role] = btn
-    
     btn.MouseButton1Click:Connect(function()
         SETTINGS.FilterRole = role
         updateFilterBtns()
     end)
 end
 
-makeFilterBtn("SEMUA", 0.03, "both")
-makeFilterBtn("KILLER", 0.355, "killer")
+makeFilterBtn("SEMUA", 0.01, "both")
+makeFilterBtn("KILLER", 0.345, "killer")
 makeFilterBtn("SURVIVOR", 0.68, "survivor")
 updateFilterBtns()
+espY = espY + 30
 
 local markBtn = Instance.new("TextButton")
-markBtn.Size = UDim2.new(0.94, 0, 0, 30)
-markBtn.Position = UDim2.new(0.03, 0, 0, 286)
-markBtn.BackgroundColor3 = COLORS.danger
-markBtn.BackgroundTransparency = 0.15
+markBtn.Size = UDim2.new(1, -10, 0, 30)
+markBtn.Position = UDim2.new(0, 5, 0, espY)
+markBtn.BackgroundColor3 = C.danger
+markBtn.BackgroundTransparency = 0.3
 markBtn.BorderSizePixel = 0
 markBtn.Text = "TANDAI PEMAIN TERDEKAT"
-markBtn.TextColor3 = COLORS.text
-markBtn.TextSize = 10
+markBtn.TextColor3 = C.text
+markBtn.TextSize = 9
 markBtn.Font = Enum.Font.GothamBold
 markBtn.Parent = espFrame
 
 local MBC = Instance.new("UICorner")
-MBC.CornerRadius = UDim.new(0, 8)
+MBC.CornerRadius = UDim.new(0, 6)
 MBC.Parent = markBtn
 
 markBtn.MouseButton1Click:Connect(function()
     local myChar = LocalPlayer.Character
     local myHRP = myChar and myChar:FindFirstChild("HumanoidRootPart")
     if not myHRP then return end
-    
     local closest, closestDist = nil, math.huge
     for _, player in ipairs(Players:GetPlayers()) do
         if player == LocalPlayer then continue end
@@ -916,7 +941,6 @@ markBtn.MouseButton1Click:Connect(function()
             end
         end
     end
-    
     if closest then
         if state.manualKiller[closest.Name] then
             state.manualKiller[closest.Name] = nil
@@ -934,46 +958,43 @@ end)
 -- TAB: LAG
 -- ═══════════════════════════════════════════════════════
 
-local lagFrame = tabContents["LAG"]
+local lagFrame = catContents["lag"]
+local lagY = 5
 
-local lagInfo = Instance.new("TextLabel")
-lagInfo.Size = UDim2.new(0.94, 0, 0, 40)
-lagInfo.Position = UDim2.new(0.03, 0, 0, 8)
-lagInfo.BackgroundColor3 = COLORS.panel
-lagInfo.BackgroundTransparency = 0.3
-lagInfo.BorderSizePixel = 0
-lagInfo.Text = "Fitur ini bantu ngurangin lag.\nHasil tergantung device & game."
-lagInfo.TextColor3 = COLORS.textDim
-lagInfo.TextSize = 9
-lagInfo.Font = Enum.Font.Gotham
-lagInfo.TextWrapped = true
-lagInfo.Parent = lagFrame
+local lagRows = {
+    {key = "RemoveParticles", label = "Hapus Partikel", sub = "Matikan effect & trail"},
+    {key = "RemoveDecals", label = "Hapus Decals", sub = "Gambar tempel di objek"},
+    {key = "RemoveTextures", label = "Hapus Textures", sub = "Texture berat"},
+    {key = "DisableShadows", label = "Matikan Shadows", sub = "Bayangan global"},
+    {key = "LimitRenderDistance", label = "Batasi Render", sub = "Render jauh (200 studs)"},
+    {key = "ReduceTerrain", label = "Kurangi Air", sub = "Detail air terrain"},
+}
 
-local LIC = Instance.new("UICorner")
-LIC.CornerRadius = UDim.new(0, 8)
-LIC.Parent = lagInfo
+for _, item in ipairs(lagRows) do
+    local r = makeRow(lagFrame, lagY, item.label, item.sub, function(row, dot)
+        lagFixes[item.key] = not lagFixes[item.key]
+        dot.BackgroundColor3 = lagFixes[item.key] and C.success or C.textDim
+        applyLagFixes()
+    end)
+    r.statusDot.BackgroundColor3 = lagFixes[item.key] and C.success or C.textDim
+    lagY = lagY + 42
+end
 
-makeToggle(lagFrame, 56, "Hapus Partikel/Effect", "RemoveParticles", lagFixes, applyLagFixes)
-makeToggle(lagFrame, 92, "Hapus Decals", "RemoveDecals", lagFixes, applyLagFixes)
-makeToggle(lagFrame, 128, "Hapus Textures", "RemoveTextures", lagFixes, applyLagFixes)
-makeToggle(lagFrame, 164, "Matikan Shadows", "DisableShadows", lagFixes, applyLagFixes)
-makeToggle(lagFrame, 200, "Batasi Render Distance", "LimitRenderDistance", lagFixes, applyLagFixes)
-makeToggle(lagFrame, 236, "Kurangi Detail Air", "ReduceTerrain", lagFixes, applyLagFixes)
-
+lagY = lagY + 6
 local resetBtn = Instance.new("TextButton")
-resetBtn.Size = UDim2.new(0.94, 0, 0, 30)
-resetBtn.Position = UDim2.new(0.03, 0, 0, 280)
-resetBtn.BackgroundColor3 = COLORS.warning
-resetBtn.BackgroundTransparency = 0.15
+resetBtn.Size = UDim2.new(1, -10, 0, 30)
+resetBtn.Position = UDim2.new(0, 5, 0, lagY)
+resetBtn.BackgroundColor3 = C.warning
+resetBtn.BackgroundTransparency = 0.3
 resetBtn.BorderSizePixel = 0
 resetBtn.Text = "RESET SEMUA LAG FIX"
-resetBtn.TextColor3 = COLORS.text
-resetBtn.TextSize = 10
+resetBtn.TextColor3 = C.text
+resetBtn.TextSize = 9
 resetBtn.Font = Enum.Font.GothamBold
 resetBtn.Parent = lagFrame
 
 local RBC = Instance.new("UICorner")
-RBC.CornerRadius = UDim.new(0, 8)
+RBC.CornerRadius = UDim.new(0, 6)
 RBC.Parent = resetBtn
 
 resetBtn.MouseButton1Click:Connect(function()
@@ -986,38 +1007,28 @@ end)
 -- TAB: PLAYER
 -- ═══════════════════════════════════════════════════════
 
-local playerFrame = tabContents["PLAYER"]
+local playerFrame = catContents["player"]
+local playerY = 5
 
-local speedInfo = Instance.new("TextLabel")
-speedInfo.Size = UDim2.new(0.94, 0, 0, 60)
-speedInfo.Position = UDim2.new(0.03, 0, 0, 8)
-speedInfo.BackgroundColor3 = COLORS.panel
-speedInfo.BackgroundTransparency = 0.3
-speedInfo.BorderSizePixel = 0
-speedInfo.Text = "SPEED BOOT NATURAL\nBoost dari kecepatan asli game.\nKalau game slow → kita ikut slow."
-speedInfo.TextColor3 = COLORS.textDim
-speedInfo.TextSize = 9
-speedInfo.Font = Enum.Font.Gotham
-speedInfo.TextWrapped = true
-speedInfo.TextYAlignment = Enum.TextYAlignment.Center
-speedInfo.Parent = playerFrame
+local speedToggle = makeRow(playerFrame, playerY, "Speed Boot", "Boost " .. string.format("%.2fx", SETTINGS.SpeedMultiplier), function(row, dot)
+    SETTINGS.SpeedEnabled = not SETTINGS.SpeedEnabled
+    dot.BackgroundColor3 = SETTINGS.SpeedEnabled and C.success or C.textDim
+    applyPlayerMods()
+end)
+speedToggle.statusDot.BackgroundColor3 = SETTINGS.SpeedEnabled and C.success or C.textDim
+playerY = playerY + 46
 
-local SIC = Instance.new("UICorner")
-SIC.CornerRadius = UDim.new(0, 8)
-SIC.Parent = speedInfo
-
-makeToggle(playerFrame, 76, "Speed Boot Aktif", "SpeedEnabled", SETTINGS, applyPlayerMods)
-
-local multLabel = Instance.new("TextLabel")
-multLabel.Size = UDim2.new(0.94, 0, 0, 16)
-multLabel.Position = UDim2.new(0.03, 0, 0, 116)
-multLabel.BackgroundTransparency = 1
-multLabel.Text = "MULTIPLIER: " .. string.format("%.2fx", SETTINGS.SpeedMultiplier)
-multLabel.TextColor3 = COLORS.textDim
-multLabel.TextSize = 9
-multLabel.Font = Enum.Font.GothamBold
-multLabel.TextXAlignment = Enum.TextXAlignment.Left
-multLabel.Parent = playerFrame
+local presetLbl = Instance.new("TextLabel")
+presetLbl.Size = UDim2.new(1, -10, 0, 16)
+presetLbl.Position = UDim2.new(0, 5, 0, playerY)
+presetLbl.BackgroundTransparency = 1
+presetLbl.Text = "MULTIPLIER"
+presetLbl.TextColor3 = C.textDim
+presetLbl.TextSize = 8
+presetLbl.Font = Enum.Font.GothamBold
+presetLbl.TextXAlignment = Enum.TextXAlignment.Left
+presetLbl.Parent = playerFrame
+playerY = playerY + 20
 
 local presets = {
     {label = "1.10x", value = 1.10},
@@ -1030,84 +1041,181 @@ local presetBtns = {}
 local function updatePresetHighlight()
     for _, data in ipairs(presetBtns) do
         if math.abs(data.value - SETTINGS.SpeedMultiplier) < 0.01 then
-            data.btn.BackgroundColor3 = COLORS.accent
-            data.btn.BackgroundTransparency = 0.1
-            data.btn.TextColor3 = COLORS.text
+            data.btn.BackgroundColor3 = C.accent
+            data.btn.BackgroundTransparency = 0.2
+            data.btn.TextColor3 = C.text
         else
-            data.btn.BackgroundColor3 = COLORS.panel
-            data.btn.BackgroundTransparency = 0.3
-            data.btn.TextColor3 = COLORS.textDim
+            data.btn.BackgroundColor3 = C.panelLight
+            data.btn.BackgroundTransparency = 0.5
+            data.btn.TextColor3 = C.textDim
         end
     end
 end
 
 for i, data in ipairs(presets) do
     local btn = Instance.new("TextButton")
-    btn.Size = UDim2.new(0.22, 0, 0, 26)
-    btn.Position = UDim2.new(0.03 + (i-1) * 0.24, 0, 0, 136)
+    btn.Size = UDim2.new(0.235, 0, 0, 24)
+    btn.Position = UDim2.new(0.01 + (i-1) * 0.245, 0, 0, playerY)
     btn.BorderSizePixel = 0
     btn.Text = data.label
-    btn.TextSize = 9
+    btn.TextSize = 8
     btn.Font = Enum.Font.GothamBold
     btn.Parent = playerFrame
     
     local c = Instance.new("UICorner")
-    c.CornerRadius = UDim.new(0, 6)
+    c.CornerRadius = UDim.new(0, 5)
     c.Parent = btn
     
     table.insert(presetBtns, {btn = btn, value = data.value})
     
     btn.MouseButton1Click:Connect(function()
         SETTINGS.SpeedMultiplier = data.value
-        multLabel.Text = "MULTIPLIER: " .. string.format("%.2fx", SETTINGS.SpeedMultiplier)
         updatePresetHighlight()
         applyPlayerMods()
     end)
 end
 updatePresetHighlight()
+playerY = playerY + 32
 
-makeSlider(playerFrame, 174, "JumpPower", 50, 200, SETTINGS.JumpPower, function(v)
-    SETTINGS.JumpPower = v
+-- JumpPower slider sederhana
+local jumpContainer = Instance.new("Frame")
+jumpContainer.Size = UDim2.new(1, -10, 0, 40)
+jumpContainer.Position = UDim2.new(0, 5, 0, playerY)
+jumpContainer.BackgroundColor3 = C.panelLight
+jumpContainer.BackgroundTransparency = 0.3
+jumpContainer.BorderSizePixel = 0
+jumpContainer.Parent = playerFrame
+
+local JCC = Instance.new("UICorner")
+JCC.CornerRadius = UDim.new(0, 6)
+JCC.Parent = jumpContainer
+
+local jumpLabel = Instance.new("TextLabel")
+jumpLabel.Size = UDim2.new(1, -20, 0, 16)
+jumpLabel.Position = UDim2.fromOffset(12, 4)
+jumpLabel.BackgroundTransparency = 1
+jumpLabel.Text = "Jump Power: " .. SETTINGS.JumpPower
+jumpLabel.TextColor3 = C.text
+jumpLabel.TextSize = 9
+jumpLabel.Font = Enum.Font.Gotham
+jumpLabel.TextXAlignment = Enum.TextXAlignment.Left
+jumpLabel.Parent = jumpContainer
+
+local jumpSliderBg = Instance.new("Frame")
+jumpSliderBg.Size = UDim2.new(1, -24, 0, 6)
+jumpSliderBg.Position = UDim2.new(0, 12, 0, 24)
+jumpSliderBg.BackgroundColor3 = C.divider
+jumpSliderBg.BorderSizePixel = 0
+jumpSliderBg.Parent = jumpContainer
+
+local JSBC = Instance.new("UICorner")
+JSBC.CornerRadius = UDim.new(1, 0)
+JSBC.Parent = jumpSliderBg
+
+local jumpFill = Instance.new("Frame")
+jumpFill.Size = UDim2.new((SETTINGS.JumpPower - 50) / 150, 0, 1, 0)
+jumpFill.BackgroundColor3 = C.accent
+jumpFill.BorderSizePixel = 0
+jumpFill.Parent = jumpSliderBg
+
+local JFC = Instance.new("UICorner")
+JFC.CornerRadius = UDim.new(1, 0)
+JFC.Parent = jumpFill
+
+local jumpKnob = Instance.new("TextButton")
+jumpKnob.Size = UDim2.fromOffset(14, 14)
+jumpKnob.Position = UDim2.new((SETTINGS.JumpPower - 50) / 150, -7, 0.5, -7)
+jumpKnob.BackgroundColor3 = C.text
+jumpKnob.BorderSizePixel = 0
+jumpKnob.Text = ""
+jumpKnob.Parent = jumpSliderBg
+
+local JKC = Instance.new("UICorner")
+JKC.CornerRadius = UDim.new(1, 0)
+JKC.Parent = jumpKnob
+
+local jumpDragging = false
+local function updateJump(input)
+    local pos = jumpSliderBg.AbsolutePosition.X
+    local size = jumpSliderBg.AbsoluteSize.X
+    local percent = math.clamp((input.Position.X - pos) / size, 0, 1)
+    local value = math.floor(50 + percent * 150)
+    SETTINGS.JumpPower = value
+    jumpFill.Size = UDim2.new(percent, 0, 1, 0)
+    jumpKnob.Position = UDim2.new(percent, -7, 0.5, -7)
+    jumpLabel.Text = "Jump Power: " .. value
     local char = LocalPlayer.Character
     if char then
         local hum = char:FindFirstChildOfClass("Humanoid")
         if hum then
-            hum.JumpPower = v
+            hum.JumpPower = value
             hum.UseJumpPower = true
         end
     end
+end
+
+jumpKnob.InputBegan:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.Touch or input.UserInputType == Enum.UserInputType.MouseButton1 then
+        jumpDragging = true
+        updateJump(input)
+    end
 end)
 
-makeToggle(playerFrame, 230, "Anti-Fling", "AntiFlingEnabled", SETTINGS)
-makeToggle(playerFrame, 266, "Infinite Jump", "InfJumpEnabled", SETTINGS)
+state.connections[#state.connections+1] = UserInputService.InputChanged:Connect(function(input)
+    if jumpDragging and (input.UserInputType == Enum.UserInputType.Touch or input.UserInputType == Enum.UserInputType.MouseMovement) then
+        updateJump(input)
+    end
+end)
+
+state.connections[#state.connections+1] = UserInputService.InputEnded:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.Touch or input.UserInputType == Enum.UserInputType.MouseButton1 then
+        jumpDragging = false
+    end
+end)
+
+playerY = playerY + 46
+
+local antiFlingRow = makeRow(playerFrame, playerY, "Anti-Fling", "Cegah diputar/lempar", function(row, dot)
+    SETTINGS.AntiFlingEnabled = not SETTINGS.AntiFlingEnabled
+    dot.BackgroundColor3 = SETTINGS.AntiFlingEnabled and C.success or C.textDim
+end)
+antiFlingRow.statusDot.BackgroundColor3 = SETTINGS.AntiFlingEnabled and C.success or C.textDim
+playerY = playerY + 42
+
+local infJumpRow = makeRow(playerFrame, playerY, "Infinite Jump", "Lompat di udara", function(row, dot)
+    SETTINGS.InfJumpEnabled = not SETTINGS.InfJumpEnabled
+    dot.BackgroundColor3 = SETTINGS.InfJumpEnabled and C.success or C.textDim
+end)
+infJumpRow.statusDot.BackgroundColor3 = SETTINGS.InfJumpEnabled and C.success or C.textDim
 
 -- ═══════════════════════════════════════════════════════
 -- TAB: MISC
 -- ═══════════════════════════════════════════════════════
 
-local miscFrame = tabContents["MISC"]
+local miscFrame = catContents["misc"]
+local miscY = 5
 
-makeToggle(miscFrame, 8, "Fullbright (Terang)", "FullbrightEnabled", SETTINGS, applyFullbright)
-makeToggle(miscFrame, 44, "No Fog (Hilangkan Kabut)", "NoFogEnabled", SETTINGS, applyNoFog)
-makeToggle(miscFrame, 80, "Anti-AFK", "antiAfkEnabled", state)
+local fbRow = makeRow(miscFrame, miscY, "Fullbright", "Terangin seluruh map", function(row, dot)
+    SETTINGS.FullbrightEnabled = not SETTINGS.FullbrightEnabled
+    dot.BackgroundColor3 = SETTINGS.FullbrightEnabled and C.success or C.textDim
+    applyFullbright()
+end)
+fbRow.statusDot.BackgroundColor3 = SETTINGS.FullbrightEnabled and C.success or C.textDim
+miscY = miscY + 42
 
-local miscInfo = Instance.new("TextLabel")
-miscInfo.Size = UDim2.new(0.94, 0, 0, 60)
-miscInfo.Position = UDim2.new(0.03, 0, 0, 120)
-miscInfo.BackgroundColor3 = COLORS.panel
-miscInfo.BackgroundTransparency = 0.3
-miscInfo.BorderSizePixel = 0
-miscInfo.Text = "Anti-AFK otomatis aktif\nbiar gak di-kick pas AFK.\nFullbright bikin game gak gelap."
-miscInfo.TextColor3 = COLORS.textDim
-miscInfo.TextSize = 9
-miscInfo.Font = Enum.Font.Gotham
-miscInfo.TextWrapped = true
-miscInfo.TextYAlignment = Enum.TextYAlignment.Top
-miscInfo.Parent = miscFrame
+local fogRow = makeRow(miscFrame, miscY, "No Fog", "Hilangkan kabut", function(row, dot)
+    SETTINGS.NoFogEnabled = not SETTINGS.NoFogEnabled
+    dot.BackgroundColor3 = SETTINGS.NoFogEnabled and C.success or C.textDim
+    applyNoFog()
+end)
+fogRow.statusDot.BackgroundColor3 = SETTINGS.NoFogEnabled and C.success or C.textDim
+miscY = miscY + 42
 
-local MIC = Instance.new("UICorner")
-MIC.CornerRadius = UDim.new(0, 8)
-MIC.Parent = miscInfo
+local afkRow = makeRow(miscFrame, miscY, "Anti-AFK", "Biar gak di-kick", function(row, dot)
+    state.antiAfkEnabled = not state.antiAfkEnabled
+    dot.BackgroundColor3 = state.antiAfkEnabled and C.success or C.textDim
+end)
+afkRow.statusDot.BackgroundColor3 = state.antiAfkEnabled and C.success or C.textDim
 
 -- ═══════════════════════════════════════════════════════
 -- EVENTS
@@ -1183,18 +1291,27 @@ state.connections[#state.connections+1] = LocalPlayer.CharacterAdded:Connect(fun
     end
 end)
 
-state.connections[#state.connections+1] = HideBtn.MouseButton1Click:Connect(function()
+-- Minimize
+local minimized = false
+state.connections[#state.connections+1] = MinimizeBtn.MouseButton1Click:Connect(function()
+    minimized = not minimized
+    Body.Visible = not minimized
+    MainFrame.Size = minimized and UDim2.fromOffset(420, 30) or UDim2.fromOffset(420, 260)
+    MinimizeBtn.Text = minimized and "+" or "−"
+end)
+
+-- Close
+state.connections[#state.connections+1] = CloseBtn.MouseButton1Click:Connect(function()
     MainFrame.Visible = false
     if not MainGui:FindFirstChild("ShowBtn") then
         local showBtn = Instance.new("TextButton")
         showBtn.Name = "ShowBtn"
         showBtn.Size = UDim2.fromOffset(44, 44)
-        showBtn.Position = UDim2.fromOffset(16, 80)
-        showBtn.BackgroundColor3 = COLORS.bg
-        showBtn.BackgroundTransparency = 0.05
+        showBtn.Position = UDim2.fromOffset(40, 80)
+        showBtn.BackgroundColor3 = C.bg
         showBtn.BorderSizePixel = 0
         showBtn.Text = "VD"
-        showBtn.TextColor3 = COLORS.accent
+        showBtn.TextColor3 = C.accent
         showBtn.TextSize = 12
         showBtn.Font = Enum.Font.GothamBold
         showBtn.Active = true
@@ -1202,11 +1319,11 @@ state.connections[#state.connections+1] = HideBtn.MouseButton1Click:Connect(func
         showBtn.Parent = MainGui
         
         local sc = Instance.new("UICorner")
-        sc.CornerRadius = UDim.new(0, 12)
+        sc.CornerRadius = UDim.new(0, 10)
         sc.Parent = showBtn
         
         local s = Instance.new("UIStroke")
-        s.Color = COLORS.accent
+        s.Color = C.accent
         s.Thickness = 1
         s.Transparency = 0.3
         s.Parent = showBtn
@@ -1223,4 +1340,4 @@ for _, player in ipairs(Players:GetPlayers()) do
     if player ~= LocalPlayer then createESP(player) end
 end
 
-print("[VD TOOLS v3] Loaded! Speed Boot FIXED")
+print("[VD TOOLS v4] Loaded! Bolong Style UI + Speed Fix (Threshold)")
