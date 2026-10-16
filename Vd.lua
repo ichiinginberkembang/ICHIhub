@@ -1,7 +1,7 @@
--- [[ VD TOOLS v6 — Bolong Style + Brutal Anti-Lag (FIXED) ]]
+-- [[ VD TOOLS v7 — Bolong Style + Brutal Anti-Lag + 5 Preset Speed ]]
 
 local env = (getgenv and getgenv()) or _G
-for _, name in ipairs({"VDTools_v1", "VDTools_v2", "VDTools_v3", "VDTools_v4", "VDTools_v5", "VDTools_v6", "SimpleESP_KillerSurvivor"}) do
+for _, name in ipairs({"VDTools_v1", "VDTools_v2", "VDTools_v3", "VDTools_v4", "VDTools_v5", "VDTools_v6", "VDTools_v7", "SimpleESP_KillerSurvivor"}) do
     local old = env[name]
     if type(old) == "table" then
         old.running = false
@@ -41,7 +41,7 @@ local state = {
     brutalLagEnabled = false,
     brutalLagConn = nil,
 }
-env.VDTools_v6 = state
+env.VDTools_v7 = state
 
 local C = {
     bg = Color3.fromRGB(14, 14, 18),
@@ -272,14 +272,13 @@ local function updateESP()
 end
 
 -- ═══════════════════════════════════════════════════════
--- BRUTAL ANTI-LAG (FIXED — HORMATI FULLBRIGHT & NO FOG)
+-- BRUTAL ANTI-LAG
 -- ═══════════════════════════════════════════════════════
 
 local function applyBrutalAntiLag()
     state.brutalLagEnabled = true
     print("[VD] Brutal Anti-Lag: APPLYING...")
     
-    -- Step 1: Lighting (hormati Fullbright & No Fog)
     pcall(function()
         Lighting.GlobalShadows = false
         
@@ -318,7 +317,6 @@ local function applyBrutalAntiLag()
         workspace.Terrain.Decoration = false
     end)
     
-    -- Step 2: Cari karakter player (protected)
     local protectedParts = {}
     for _, plr in ipairs(Players:GetPlayers()) do
         if plr.Character then
@@ -329,7 +327,6 @@ local function applyBrutalAntiLag()
         end
     end
     
-    -- Step 3: Iterasi workspace (ASYNC biar gak freeze)
     task.spawn(function()
         local count = 0
         local batch = 0
@@ -408,7 +405,6 @@ local function resetBrutalAntiLag()
         workspace.Terrain.WaterTransparency = 0.5
     end)
     
-    -- Re-apply Fullbright & No Fog kalau masih aktif
     task.defer(function()
         if SETTINGS.FullbrightEnabled then
             pcall(function()
@@ -504,7 +500,7 @@ local function applyPlayerMods()
 end
 
 -- ═══════════════════════════════════════════════════════
--- MISC (HORMATI ANTI-LAG)
+-- MISC
 -- ═══════════════════════════════════════════════════════
 
 local function applyFullbright()
@@ -640,7 +636,7 @@ local HeaderTitle = Instance.new("TextLabel")
 HeaderTitle.Size = UDim2.new(0, 200, 1, 0)
 HeaderTitle.Position = UDim2.fromOffset(38, 0)
 HeaderTitle.BackgroundTransparency = 1
-HeaderTitle.Text = "VD TOOLS  |  v6"
+HeaderTitle.Text = "VD TOOLS  |  v7"
 HeaderTitle.TextColor3 = C.text
 HeaderTitle.TextSize = 11
 HeaderTitle.Font = Enum.Font.GothamBold
@@ -1041,7 +1037,7 @@ markBtn.MouseButton1Click:Connect(function()
 end)
 
 -- ═══════════════════════════════════════════════════════
--- TAB: LAG (ONE-CLICK BRUTAL)
+-- TAB: LAG
 -- ═══════════════════════════════════════════════════════
 
 local lagFrame = catContents["lag"]
@@ -1109,34 +1105,26 @@ brutalSub.Font = Enum.Font.Gotham
 brutalSub.TextXAlignment = Enum.TextXAlignment.Left
 brutalSub.Parent = brutalBtn
 
--- ⭐ TOGGLE FUNCTION
 local toggleBrutal = function()
     if not state.brutalLagEnabled then
-        -- Update UI DULU (instan)
         brutalBtn.Text = "⚡ BRUTAL ANTI-LAG: ON ⚡"
         brutalBtn.BackgroundColor3 = C.success
         brutalSub.Text = "SEMUA fix aktif — HP ringan"
-        
-        -- Apply di background
         task.spawn(function()
             pcall(applyBrutalAntiLag)
         end)
-        
         print("[VD] Brutal: ON clicked")
     else
         brutalBtn.Text = "⚡ BRUTAL ANTI-LAG: OFF ⚡"
         brutalBtn.BackgroundColor3 = C.danger
         brutalSub.Text = "Klik 1x → semua lag fix nyala"
-        
         task.spawn(function()
             pcall(resetBrutalAntiLag)
         end)
-        
         print("[VD] Brutal: OFF clicked")
     end
 end
 
--- ⭐ Pake Activated (mobile + PC)
 brutalBtn.Activated:Connect(toggleBrutal)
 
 local tipsBox = Instance.new("Frame")
@@ -1193,6 +1181,7 @@ playerY = playerY + 20
 
 local presets = {
     {label = "1.10x", value = 1.10},
+    {label = "1.20x", value = 1.20},
     {label = "1.25x", value = 1.25},
     {label = "1.50x", value = 1.50},
     {label = "2.00x", value = 2.00},
@@ -1215,8 +1204,8 @@ end
 
 for i, data in ipairs(presets) do
     local btn = Instance.new("TextButton")
-    btn.Size = UDim2.new(0.235, 0, 0, 24)
-    btn.Position = UDim2.new(0.01 + (i-1) * 0.245, 0, 0, playerY)
+    btn.Size = UDim2.new(0.185, 0, 0, 24)
+    btn.Position = UDim2.new(0.01 + (i-1) * 0.195, 0, 0, playerY)
     btn.BorderSizePixel = 0
     btn.Text = data.label
     btn.TextSize = 8
@@ -1492,5 +1481,4 @@ for _, player in ipairs(Players:GetPlayers()) do
     if player ~= LocalPlayer then createESP(player) end
 end
 
-print("[VD TOOLS v6] Loaded!")
-print("[VD TOOLS v6] Brutal Anti-Lag: 1 Click (Hormati Fullbright & No Fog)")
+print("[VD TOOLS v7] Loaded! 5 Preset Speed: 1.10x / 1.20x / 1.25x / 1.50x / 2.00x")
