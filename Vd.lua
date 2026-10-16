@@ -1,8 +1,9 @@
--- [[ SIMPLE ESP v6 — KILLER vs SURVIVOR ]]
--- UI Redesign: Soft Color, Comfortable Font, Clean Layout
+-- [[ VD TOOLS v2 — Multi-Feature Hub ]]
+-- Fitur: ESP, Fix Lag, Speed Boot (Natural), Player Mods, Misc
+-- Update: Speed Boot auto-monitor WalkSpeed game
 
 local env = (getgenv and getgenv()) or _G
-for _, name in ipairs({"SimpleESP_KillerSurvivor"}) do
+for _, name in ipairs({"VDTools_v1", "VDTools_v2", "SimpleESP_KillerSurvivor"}) do
     local old = env[name]
     if type(old) == "table" then
         old.running = false
@@ -24,50 +25,70 @@ end
 
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
+local Lighting = game:GetService("Lighting")
+local UserInputService = game:GetService("UserInputService")
 local LocalPlayer = Players.LocalPlayer
 local Camera = workspace.CurrentCamera
 
 local state = {
     running = true,
-    enabled = true,
+    espEnabled = true,
     connections = {},
     guis = {},
     esps = {},
     manualKiller = {},
     manualSurvivor = {},
+    antiAfkEnabled = true,
+    speedMonitorConn = nil,
 }
-env.SimpleESP_KillerSurvivor = state
+env.VDTools_v2 = state
 
--- ⭐ COLOR PALETTE (SOFT)
+-- ⭐ COLOR PALETTE
 local COLORS = {
-    bg = Color3.fromRGB(28, 32, 42),           -- Background gelap soft
-    panel = Color3.fromRGB(38, 44, 58),        -- Panel
-    panelHover = Color3.fromRGB(48, 56, 72),   -- Panel hover
-    text = Color3.fromRGB(230, 235, 245),      -- Text putih soft
-    textDim = Color3.fromRGB(150, 160, 180),   -- Text secondary
-    accent = Color3.fromRGB(120, 150, 220),    -- Biru soft (bukan neon)
-    success = Color3.fromRGB(95, 200, 130),    -- Hijau soft
-    danger = Color3.fromRGB(220, 100, 100),    -- Merah soft
-    warning = Color3.fromRGB(240, 180, 80),    -- Kuning soft
-    divider = Color3.fromRGB(55, 62, 80),      -- Garis pemisah
-    border = Color3.fromRGB(70, 80, 105),      -- Border
+    bg = Color3.fromRGB(28, 32, 42),
+    panel = Color3.fromRGB(38, 44, 58),
+    panelHover = Color3.fromRGB(48, 56, 72),
+    text = Color3.fromRGB(230, 235, 245),
+    textDim = Color3.fromRGB(150, 160, 180),
+    accent = Color3.fromRGB(120, 150, 220),
+    success = Color3.fromRGB(95, 200, 130),
+    danger = Color3.fromRGB(220, 100, 100),
+    warning = Color3.fromRGB(240, 180, 80),
+    divider = Color3.fromRGB(55, 62, 80),
+    border = Color3.fromRGB(70, 80, 105),
 }
 
+-- ⭐ SETTINGS
 local SETTINGS = {
     MaxDistance = 1000,
-    UpdateRate = 0.1,
     SurvivorColor = Color3.fromRGB(80, 180, 255),
     KillerColor = Color3.fromRGB(255, 90, 90),
     UnknownColor = Color3.fromRGB(180, 180, 180),
     FillTransparency = 0.7,
-    
     ShowBox = true,
     ShowRole = true,
     ShowName = true,
     ShowDistance = true,
     ShowHealth = true,
     FilterRole = "both",
+    
+    -- Speed Boot
+    SpeedEnabled = false,
+    SpeedMultiplier = 1.25,
+    JumpPower = 50,
+    
+    -- Player Mods
+    InfJumpEnabled = false,
+    AntiFlingEnabled = false,
+    
+    -- Misc
+    FullbrightEnabled = false,
+    NoFogEnabled = false,
 }
+
+-- ═══════════════════════════════════════════════════════
+-- SECTION: ESP
+-- ═══════════════════════════════════════════════════════
 
 local function getRole(player)
     if state.manualKiller[player.Name] then return "killer" end
@@ -75,12 +96,8 @@ local function getRole(player)
     
     if player.Team then
         local teamName = player.Team.Name:lower()
-        if teamName:find("killer") or teamName:find("murder") or teamName:find("hunter") then
-            return "killer"
-        end
-        if teamName:find("survivor") or teamName:find("innocent") or teamName:find("runner") then
-            return "survivor"
-        end
+        if teamName:find("killer") or teamName:find("murder") or teamName:find("hunter") then return "killer" end
+        if teamName:find("survivor") or teamName:find("innocent") or teamName:find("runner") then return "survivor" end
     end
     
     if player.TeamColor then
@@ -109,14 +126,6 @@ local function getRole(player)
                 end
             end
         end
-        local ok2, role2 = pcall(function()
-            return char:GetAttribute("Role") or char:GetAttribute("role")
-        end)
-        if ok2 and role2 then
-            local r = tostring(role2):lower()
-            if r:find("killer") or r:find("murder") then return "killer" end
-            if r:find("survivor") or r:find("innocent") then return "survivor" end
-        end
     end
     return "unknown"
 end
@@ -137,20 +146,8 @@ end
 local function removeESP(player)
     local data = state.esps[player]
     if not data then return end
-    if data.Highlight then 
-        pcall(function() 
-            data.Highlight.Enabled = false
-            data.Highlight.Adornee = nil
-            data.Highlight:Destroy() 
-        end) 
-    end
-    if data.Billboard then 
-        pcall(function() 
-            data.Billboard.Enabled = false
-            data.Billboard.Adornee = nil
-            data.Billboard:Destroy() 
-        end) 
-    end
+    if data.Highlight then pcall(function() data.Highlight:Destroy() end) end
+    if data.Billboard then pcall(function() data.Billboard:Destroy() end) end
     state.esps[player] = nil
 end
 
@@ -183,9 +180,7 @@ local function createESP(player)
     
     local roleLabel = Instance.new("TextLabel")
     roleLabel.Size = UDim2.new(1, 0, 0, 18)
-    roleLabel.Position = UDim2.new(0, 0, 0, 0)
     roleLabel.BackgroundTransparency = 1
-    roleLabel.Text = "?"
     roleLabel.TextStrokeTransparency = 0
     roleLabel.TextStrokeColor3 = Color3.fromRGB(0, 0, 0)
     roleLabel.TextSize = 13
@@ -207,7 +202,6 @@ local function createESP(player)
     distanceLabel.Size = UDim2.new(1, 0, 0, 14)
     distanceLabel.Position = UDim2.new(0, 0, 0, 34)
     distanceLabel.BackgroundTransparency = 1
-    distanceLabel.Text = "0m"
     distanceLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
     distanceLabel.TextStrokeTransparency = 0
     distanceLabel.TextStrokeColor3 = Color3.fromRGB(0, 0, 0)
@@ -219,7 +213,6 @@ local function createESP(player)
     healthLabel.Size = UDim2.new(1, 0, 0, 14)
     healthLabel.Position = UDim2.new(0, 0, 0, 48)
     healthLabel.BackgroundTransparency = 1
-    healthLabel.Text = "100 HP"
     healthLabel.TextColor3 = Color3.fromRGB(100, 255, 100)
     healthLabel.TextStrokeTransparency = 0
     healthLabel.TextStrokeColor3 = Color3.fromRGB(0, 0, 0)
@@ -237,7 +230,7 @@ local function createESP(player)
 end
 
 local function updateESP()
-    if not state.enabled then
+    if not state.espEnabled then
         for _, player in ipairs(Players:GetPlayers()) do
             if state.esps[player] then removeESP(player) end
         end
@@ -310,11 +303,7 @@ local function updateESP()
                 
                 data.HealthLabel.Text = math.floor(humanoid.Health) .. " HP"
                 local hpPercent = humanoid.Health / humanoid.MaxHealth
-                data.HealthLabel.TextColor3 = Color3.fromRGB(
-                    255 * (1 - hpPercent),
-                    255 * hpPercent,
-                    100
-                )
+                data.HealthLabel.TextColor3 = Color3.fromRGB(255 * (1 - hpPercent), 255 * hpPercent, 100)
                 data.HealthLabel.Visible = SETTINGS.ShowHealth
             end
         else
@@ -324,99 +313,257 @@ local function updateESP()
     end
 end
 
-state.connections[#state.connections+1] = Players.PlayerAdded:Connect(function(player)
-    player.CharacterAdded:Connect(function()
-        task.wait(0.5)
-        if state.enabled then createESP(player) end
-    end)
-    if player.Character and state.enabled then createESP(player) end
-end)
+-- ═══════════════════════════════════════════════════════
+-- SECTION: SPEED BOOT (NATURAL MULTIPLIER)
+-- ═══════════════════════════════════════════════════════
 
-state.connections[#state.connections+1] = Players.PlayerRemoving:Connect(function(player)
-    removeESP(player)
-end)
+local gameBaseSpeed = 16
+local ourSetSpeed = nil
 
-for _, player in ipairs(Players:GetPlayers()) do
-    if player ~= LocalPlayer then createESP(player) end
+local function disconnectSpeedMonitor()
+    if state.speedMonitorConn then
+        pcall(function() state.speedMonitorConn:Disconnect() end)
+        state.speedMonitorConn = nil
+    end
 end
 
--- ⭐ GUI REDESIGN
+local function applySpeedBoot()
+    local char = LocalPlayer.Character
+    if not char then return end
+    local hum = char:FindFirstChildOfClass("Humanoid")
+    if not hum then return end
+    
+    disconnectSpeedMonitor()
+    
+    if not SETTINGS.SpeedEnabled then
+        hum.WalkSpeed = gameBaseSpeed
+        ourSetSpeed = nil
+        return
+    end
+    
+    ourSetSpeed = gameBaseSpeed * SETTINGS.SpeedMultiplier
+    hum.WalkSpeed = ourSetSpeed
+    
+    -- ⭐ MONITOR: Kalau game ubah WalkSpeed (slow/perk/freeze)
+    state.speedMonitorConn = hum:GetPropertyChangedSignal("WalkSpeed"):Connect(function()
+        if not SETTINGS.SpeedEnabled then return end
+        if not hum or not hum.Parent then return end
+        
+        local current = hum.WalkSpeed
+        
+        -- Skip kalau perubahan dari kita sendiri
+        if ourSetSpeed and math.abs(current - ourSetSpeed) < 0.01 then
+            return
+        end
+        
+        -- Game yang ubah → update base
+        gameBaseSpeed = current
+        ourSetSpeed = gameBaseSpeed * SETTINGS.SpeedMultiplier
+        
+        -- Apply multiplier
+        task.defer(function()
+            if hum and hum.Parent and SETTINGS.SpeedEnabled then
+                pcall(function()
+                    hum.WalkSpeed = ourSetSpeed
+                end)
+            end
+        end)
+    end)
+end
+
+local function initSpeedBoot()
+    local char = LocalPlayer.Character
+    if not char then return end
+    local hum = char:FindFirstChildOfClass("Humanoid")
+    if not hum then return end
+    
+    -- Kalau belum pernah init, baca base speed
+    if not SETTINGS.SpeedEnabled then
+        gameBaseSpeed = hum.WalkSpeed
+    end
+    
+    applySpeedBoot()
+end
+
+local function applyPlayerMods()
+    local char = LocalPlayer.Character
+    if not char then return end
+    local humanoid = char:FindFirstChildOfClass("Humanoid")
+    if not humanoid then return end
+    
+    humanoid.JumpPower = SETTINGS.JumpPower
+    humanoid.UseJumpPower = true
+    
+    initSpeedBoot()
+end
+
+-- ═══════════════════════════════════════════════════════
+-- SECTION: FIX LAG
+-- ═══════════════════════════════════════════════════════
+
+local lagFixes = {
+    RemoveParticles = false,
+    RemoveDecals = false,
+    RemoveTextures = false,
+    DisableShadows = false,
+    LimitRenderDistance = false,
+    ReduceTerrain = false,
+}
+
+local function applyLagFixes()
+    if lagFixes.RemoveParticles then
+        for _, obj in ipairs(workspace:GetDescendants()) do
+            if obj:IsA("ParticleEmitter") or obj:IsA("Smoke") or obj:IsA("Fire") or obj:IsA("Sparkles") or obj:IsA("Trail") then
+                pcall(function() obj.Enabled = false end)
+            end
+        end
+    end
+    
+    for _, obj in ipairs(workspace:GetDescendants()) do
+        if lagFixes.RemoveDecals and obj:IsA("Decal") then
+            pcall(function() obj.Transparency = 1 end)
+        end
+        if lagFixes.RemoveTextures and obj:IsA("Texture") then
+            pcall(function() obj.Transparency = 1 end)
+        end
+    end
+    
+    if lagFixes.DisableShadows then
+        Lighting.GlobalShadows = false
+    end
+    
+    if lagFixes.LimitRenderDistance and Camera then
+        Camera.FarPlane = 200
+    end
+    
+    if lagFixes.ReduceTerrain then
+        pcall(function()
+            workspace.Terrain.WaterWaveSize = 0
+            workspace.Terrain.WaterWaveSpeed = 0
+            workspace.Terrain.WaterReflectance = 0
+            workspace.Terrain.WaterTransparency = 1
+        end)
+    end
+end
+
+local function resetLagFixes()
+    Lighting.GlobalShadows = true
+    if Camera then Camera.FarPlane = 100000 end
+    pcall(function()
+        workspace.Terrain.WaterWaveSize = 0.15
+        workspace.Terrain.WaterWaveSpeed = 10
+        workspace.Terrain.WaterReflectance = 0.1
+        workspace.Terrain.WaterTransparency = 0.5
+    end)
+end
+
+-- ═══════════════════════════════════════════════════════
+-- SECTION: MISC
+-- ═══════════════════════════════════════════════════════
+
+local function applyFullbright()
+    if SETTINGS.FullbrightEnabled then
+        Lighting.Brightness = 3
+        Lighting.ClockTime = 14
+        Lighting.Ambient = Color3.fromRGB(180, 180, 180)
+        Lighting.OutdoorAmbient = Color3.fromRGB(180, 180, 180)
+        Lighting.GlobalShadows = false
+    else
+        Lighting.Brightness = 1
+        Lighting.Ambient = Color3.fromRGB(70, 70, 70)
+        Lighting.OutdoorAmbient = Color3.fromRGB(128, 128, 128)
+        Lighting.GlobalShadows = true
+    end
+end
+
+local function applyNoFog()
+    if SETTINGS.NoFogEnabled then
+        Lighting.FogEnd = 100000
+        Lighting.FogStart = 0
+    else
+        Lighting.FogEnd = 1000
+        Lighting.FogStart = 0
+    end
+end
+
+task.spawn(function()
+    while state.running do
+        task.wait(30)
+        if state.antiAfkEnabled and state.running then
+            pcall(function()
+                game:GetService("VirtualUser"):CaptureController()
+                game:GetService("VirtualUser"):ClickButton1(Vector2.new(0, 0))
+            end)
+        end
+    end
+end)
+
+-- ═══════════════════════════════════════════════════════
+-- GUI
+-- ═══════════════════════════════════════════════════════
+
 local playerGui = LocalPlayer:WaitForChild("PlayerGui")
-local oldGui = playerGui:FindFirstChild("ESPControlGui")
+local oldGui = playerGui:FindFirstChild("VDToolsGui")
 if oldGui then oldGui:Destroy() end
 
 local MainGui = Instance.new("ScreenGui")
-MainGui.Name = "ESPControlGui"
+MainGui.Name = "VDToolsGui"
 MainGui.ResetOnSpawn = false
 MainGui.DisplayOrder = 1000
 MainGui.Parent = playerGui
 state.guis[#state.guis+1] = MainGui
 
--- ⭐ MAIN PANEL (compact + clean)
-local ControlFrame = Instance.new("Frame")
-ControlFrame.Size = UDim2.fromOffset(150, 92)
-ControlFrame.Position = UDim2.fromOffset(16, 100)
-ControlFrame.BackgroundColor3 = COLORS.bg
-ControlFrame.BackgroundTransparency = 0.05
-ControlFrame.BorderSizePixel = 0
-ControlFrame.Active = true
-ControlFrame.Draggable = true
-ControlFrame.Parent = MainGui
+local MainFrame = Instance.new("Frame")
+MainFrame.Size = UDim2.fromOffset(240, 340)
+MainFrame.Position = UDim2.fromOffset(16, 80)
+MainFrame.BackgroundColor3 = COLORS.bg
+MainFrame.BackgroundTransparency = 0.05
+MainFrame.BorderSizePixel = 0
+MainFrame.Active = true
+MainFrame.Draggable = true
+MainFrame.Parent = MainGui
 
-local CF = Instance.new("UICorner")
-CF.CornerRadius = UDim.new(0, 12)
-CF.Parent = ControlFrame
+local MFC = Instance.new("UICorner")
+MFC.CornerRadius = UDim.new(0, 12)
+MFC.Parent = MainFrame
 
-local CF2 = Instance.new("UIStroke")
-CF2.Color = COLORS.border
-CF2.Thickness = 1
-CF2.Transparency = 0.5
-CF2.Parent = ControlFrame
+local MFB = Instance.new("UIStroke")
+MFB.Color = COLORS.border
+MFB.Thickness = 1
+MFB.Transparency = 0.5
+MFB.Parent = MainFrame
 
--- Header
 local Header = Instance.new("Frame")
-Header.Size = UDim2.new(1, 0, 0, 26)
+Header.Size = UDim2.new(1, 0, 0, 30)
 Header.BackgroundColor3 = COLORS.panel
 Header.BorderSizePixel = 0
-Header.Parent = ControlFrame
+Header.Parent = MainFrame
 
-local HCR = Instance.new("UICorner")
-HCR.CornerRadius = UDim.new(0, 12)
-HCR.Parent = Header
+local HC = Instance.new("UICorner")
+HC.CornerRadius = UDim.new(0, 12)
+HC.Parent = Header
 
--- Fix bottom corners of header
 local HeaderFix = Instance.new("Frame")
-HeaderFix.Size = UDim2.new(1, 0, 0, 12)
-HeaderFix.Position = UDim2.new(0, 0, 1, -12)
+HeaderFix.Size = UDim2.new(1, 0, 0, 15)
+HeaderFix.Position = UDim2.new(0, 0, 1, -15)
 HeaderFix.BackgroundColor3 = COLORS.panel
 HeaderFix.BorderSizePixel = 0
 HeaderFix.Parent = Header
 
 local HeaderTitle = Instance.new("TextLabel")
-HeaderTitle.Size = UDim2.new(1, -40, 1, 0)
-HeaderTitle.Position = UDim2.fromOffset(12, 0)
+HeaderTitle.Size = UDim2.new(1, -50, 1, 0)
+HeaderTitle.Position = UDim2.fromOffset(14, 0)
 HeaderTitle.BackgroundTransparency = 1
-HeaderTitle.Text = "ESP"
+HeaderTitle.Text = "VD TOOLS v2"
 HeaderTitle.TextColor3 = COLORS.text
-HeaderTitle.TextSize = 12
+HeaderTitle.TextSize = 13
 HeaderTitle.Font = Enum.Font.GothamBold
 HeaderTitle.TextXAlignment = Enum.TextXAlignment.Left
 HeaderTitle.Parent = Header
 
-local StatusDot = Instance.new("Frame")
-StatusDot.Size = UDim2.fromOffset(8, 8)
-StatusDot.Position = UDim2.new(1, -50, 0.5, -4)
-StatusDot.BackgroundColor3 = COLORS.success
-StatusDot.BorderSizePixel = 0
-StatusDot.Parent = Header
-
-local SDC = Instance.new("UICorner")
-SDC.CornerRadius = UDim.new(1, 0)
-SDC.Parent = StatusDot
-
 local HideBtn = Instance.new("TextButton")
-HideBtn.Size = UDim2.fromOffset(18, 18)
-HideBtn.Position = UDim2.new(1, -24, 0.5, -9)
+HideBtn.Size = UDim2.fromOffset(20, 20)
+HideBtn.Position = UDim2.new(1, -26, 0.5, -10)
 HideBtn.BackgroundColor3 = COLORS.panelHover
 HideBtn.BackgroundTransparency = 0.3
 HideBtn.BorderSizePixel = 0
@@ -430,293 +577,331 @@ local HBC = Instance.new("UICorner")
 HBC.CornerRadius = UDim.new(1, 0)
 HBC.Parent = HideBtn
 
--- Toggle button (full width)
-local ToggleBtn = Instance.new("TextButton")
-ToggleBtn.Size = UDim2.new(0.9, 0, 0, 26)
-ToggleBtn.Position = UDim2.new(0.05, 0, 0, 32)
-ToggleBtn.BackgroundColor3 = COLORS.success
-ToggleBtn.BackgroundTransparency = 0.15
-ToggleBtn.BorderSizePixel = 0
-ToggleBtn.Text = "AKTIF"
-ToggleBtn.TextColor3 = COLORS.text
-ToggleBtn.TextSize = 11
-ToggleBtn.Font = Enum.Font.GothamBold
-ToggleBtn.Parent = ControlFrame
+local TabRow = Instance.new("Frame")
+TabRow.Size = UDim2.new(1, -16, 0, 28)
+TabRow.Position = UDim2.fromOffset(8, 36)
+TabRow.BackgroundColor3 = COLORS.panel
+TabRow.BackgroundTransparency = 0.4
+TabRow.BorderSizePixel = 0
+TabRow.Parent = MainFrame
 
-local TB = Instance.new("UICorner")
-TB.CornerRadius = UDim.new(0, 8)
-TB.Parent = ToggleBtn
+local TRC = Instance.new("UICorner")
+TRC.CornerRadius = UDim.new(0, 8)
+TRC.Parent = TabRow
 
--- Settings + Mark (row)
-local SettingsBtn = Instance.new("TextButton")
-SettingsBtn.Size = UDim2.new(0.43, 0, 0, 24)
-SettingsBtn.Position = UDim2.new(0.05, 0, 0, 62)
-SettingsBtn.BackgroundColor3 = COLORS.accent
-SettingsBtn.BackgroundTransparency = 0.15
-SettingsBtn.BorderSizePixel = 0
-SettingsBtn.Text = "PENGATURAN"
-SettingsBtn.TextColor3 = COLORS.text
-SettingsBtn.TextSize = 8
-SettingsBtn.Font = Enum.Font.GothamBold
-SettingsBtn.Parent = ControlFrame
+local tabs = {"ESP", "LAG", "PLAYER", "MISC"}
+local tabBtns = {}
+local currentTab = "ESP"
 
-local STB = Instance.new("UICorner")
-STB.CornerRadius = UDim.new(0, 7)
-STB.Parent = SettingsBtn
+local ContentFrame = Instance.new("Frame")
+ContentFrame.Size = UDim2.new(1, -16, 1, -108)
+ContentFrame.Position = UDim2.fromOffset(8, 70)
+ContentFrame.BackgroundColor3 = COLORS.panel
+ContentFrame.BackgroundTransparency = 0.4
+ContentFrame.BorderSizePixel = 0
+ContentFrame.Parent = MainFrame
 
-local MarkBtn = Instance.new("TextButton")
-MarkBtn.Size = UDim2.new(0.43, 0, 0, 24)
-MarkBtn.Position = UDim2.new(0.52, 0, 0, 62)
-MarkBtn.BackgroundColor3 = COLORS.danger
-MarkBtn.BackgroundTransparency = 0.15
-MarkBtn.BorderSizePixel = 0
-MarkBtn.Text = "TANDAI"
-MarkBtn.TextColor3 = COLORS.text
-MarkBtn.TextSize = 8
-MarkBtn.Font = Enum.Font.GothamBold
-MarkBtn.Parent = ControlFrame
+local CFC = Instance.new("UICorner")
+CFC.CornerRadius = UDim.new(0, 8)
+CFC.Parent = ContentFrame
 
-local MB = Instance.new("UICorner")
-MB.CornerRadius = UDim.new(0, 7)
-MB.Parent = MarkBtn
+local Scroll = Instance.new("ScrollingFrame")
+Scroll.Size = UDim2.new(1, -8, 1, -8)
+Scroll.Position = UDim2.fromOffset(4, 4)
+Scroll.BackgroundTransparency = 1
+Scroll.BorderSizePixel = 0
+Scroll.CanvasSize = UDim2.new(0, 0, 0, 500)
+Scroll.ScrollBarThickness = 3
+Scroll.ScrollBarImageColor3 = COLORS.accent
+Scroll.Parent = ContentFrame
 
--- ⭐ SETTINGS PANEL (redesign)
-local SettingsPanel = Instance.new("Frame")
-SettingsPanel.Size = UDim2.fromOffset(190, 300)
-SettingsPanel.Position = UDim2.fromOffset(180, 100)
-SettingsPanel.BackgroundColor3 = COLORS.bg
-SettingsPanel.BackgroundTransparency = 0.05
-SettingsPanel.BorderSizePixel = 0
-SettingsPanel.Visible = false
-SettingsPanel.Active = true
-SettingsPanel.Draggable = true
-SettingsPanel.Parent = MainGui
+local tabContents = {}
+for _, tabName in ipairs(tabs) do
+    local frame = Instance.new("Frame")
+    frame.Size = UDim2.new(1, 0, 0, 500)
+    frame.BackgroundTransparency = 1
+    frame.Visible = (tabName == currentTab)
+    frame.Parent = Scroll
+    tabContents[tabName] = frame
+end
 
-local SPF = Instance.new("UICorner")
-SPF.CornerRadius = UDim.new(0, 12)
-SPF.Parent = SettingsPanel
-
-local SPF2 = Instance.new("UIStroke")
-SPF2.Color = COLORS.border
-SPF2.Thickness = 1
-SPF2.Transparency = 0.5
-SPF2.Parent = SettingsPanel
-
--- Settings Header
-local SPHeader = Instance.new("Frame")
-SPHeader.Size = UDim2.new(1, 0, 0, 30)
-SPHeader.BackgroundColor3 = COLORS.panel
-SPHeader.BorderSizePixel = 0
-SPHeader.Parent = SettingsPanel
-
-local SPHC = Instance.new("UICorner")
-SPHC.CornerRadius = UDim.new(0, 12)
-SPHC.Parent = SPHeader
-
-local SPHeaderFix = Instance.new("Frame")
-SPHeaderFix.Size = UDim2.new(1, 0, 0, 15)
-SPHeaderFix.Position = UDim2.new(0, 0, 1, -15)
-SPHeaderFix.BackgroundColor3 = COLORS.panel
-SPHeaderFix.BorderSizePixel = 0
-SPHeaderFix.Parent = SPHeader
-
-local SPHeaderTitle = Instance.new("TextLabel")
-SPHeaderTitle.Size = UDim2.new(1, -16, 1, 0)
-SPHeaderTitle.Position = UDim2.fromOffset(14, 0)
-SPHeaderTitle.BackgroundTransparency = 1
-SPHeaderTitle.Text = "PENGATURAN TAMPILAN"
-SPHeaderTitle.TextColor3 = COLORS.text
-SPHeaderTitle.TextSize = 10
-SPHeaderTitle.Font = Enum.Font.GothamBold
-SPHeaderTitle.TextXAlignment = Enum.TextXAlignment.Left
-SPHeaderTitle.Parent = SPHeader
-
--- ⭐ TOGGLE HELPER (clean design)
-local function makeToggle(y, labelText, key)
-    local Btn = Instance.new("TextButton")
-    Btn.Size = UDim2.new(0.88, 0, 0, 28)
-    Btn.Position = UDim2.new(0.06, 0, 0, y)
-    Btn.BackgroundColor3 = SETTINGS[key] and COLORS.success or COLORS.panel
-    Btn.BackgroundTransparency = SETTINGS[key] and 0.2 or 0.3
-    Btn.BorderSizePixel = 0
-    Btn.Text = ""
-    Btn.Parent = SettingsPanel
+for i, tabName in ipairs(tabs) do
+    local btn = Instance.new("TextButton")
+    btn.Size = UDim2.new(1/#tabs, -2, 1, -4)
+    btn.Position = UDim2.new((i-1)/#tabs, 1, 0, 2)
+    btn.BackgroundColor3 = (tabName == currentTab) and COLORS.accent or COLORS.panel
+    btn.BackgroundTransparency = (tabName == currentTab) and 0.1 or 0.6
+    btn.BorderSizePixel = 0
+    btn.Text = tabName
+    btn.TextColor3 = (tabName == currentTab) and COLORS.text or COLORS.textDim
+    btn.TextSize = 9
+    btn.Font = Enum.Font.GothamBold
+    btn.Parent = TabRow
     
     local c = Instance.new("UICorner")
-    c.CornerRadius = UDim.new(0, 8)
-    c.Parent = Btn
+    c.CornerRadius = UDim.new(0, 6)
+    c.Parent = btn
     
-    local Label = Instance.new("TextLabel")
-    Label.Size = UDim2.new(1, -50, 1, 0)
-    Label.Position = UDim2.fromOffset(12, 0)
-    Label.BackgroundTransparency = 1
-    Label.Text = labelText
-    Label.TextColor3 = COLORS.text
-    Label.TextSize = 10
-    Label.Font = Enum.Font.Gotham
-    Label.TextXAlignment = Enum.TextXAlignment.Left
-    Label.Parent = Btn
+    tabBtns[tabName] = btn
     
-    local StateLabel = Instance.new("TextLabel")
-    StateLabel.Size = UDim2.fromOffset(36, 16)
-    StateLabel.Position = UDim2.new(1, -42, 0.5, -8)
-    StateLabel.BackgroundColor3 = SETTINGS[key] and COLORS.success or COLORS.divider
-    StateLabel.BackgroundTransparency = 0.2
-    StateLabel.BorderSizePixel = 0
-    StateLabel.Text = SETTINGS[key] and "ON" or "OFF"
-    StateLabel.TextColor3 = COLORS.text
-    StateLabel.TextSize = 8
-    StateLabel.Font = Enum.Font.GothamBold
-    StateLabel.Parent = Btn
-    
-    local SLC = Instance.new("UICorner")
-    SLC.CornerRadius = UDim.new(0, 4)
-    SLC.Parent = StateLabel
-    
-    Btn.MouseButton1Click:Connect(function()
-        SETTINGS[key] = not SETTINGS[key]
-        Btn.BackgroundColor3 = SETTINGS[key] and COLORS.success or COLORS.panel
-        Btn.BackgroundTransparency = SETTINGS[key] and 0.2 or 0.3
-        StateLabel.Text = SETTINGS[key] and "ON" or "OFF"
-        StateLabel.BackgroundColor3 = SETTINGS[key] and COLORS.success or COLORS.divider
+    btn.MouseButton1Click:Connect(function()
+        currentTab = tabName
+        for tn, tb in pairs(tabBtns) do
+            if tn == tabName then
+                tb.BackgroundColor3 = COLORS.accent
+                tb.BackgroundTransparency = 0.1
+                tb.TextColor3 = COLORS.text
+                tabContents[tn].Visible = true
+            else
+                tb.BackgroundColor3 = COLORS.panel
+                tb.BackgroundTransparency = 0.6
+                tb.TextColor3 = COLORS.textDim
+                tabContents[tn].Visible = false
+            end
+        end
+        Scroll.CanvasPosition = Vector2.new(0, 0)
     end)
 end
 
-makeToggle(38, "Kotak Highlight", "ShowBox")
-makeToggle(70, "Role (Killer/Survivor)", "ShowRole")
-makeToggle(102, "Nama Pemain", "ShowName")
-makeToggle(134, "Jarak", "ShowDistance")
-makeToggle(166, "Darah (HP)", "ShowHealth")
+-- ⭐ HELPERS
+local function makeToggle(parent, y, labelText, key, table, callback)
+    local container = Instance.new("Frame")
+    container.Size = UDim2.new(0.94, 0, 0, 30)
+    container.Position = UDim2.new(0.03, 0, 0, y)
+    container.BackgroundColor3 = COLORS.panel
+    container.BackgroundTransparency = 0.3
+    container.BorderSizePixel = 0
+    container.Parent = parent
+    
+    local c = Instance.new("UICorner")
+    c.CornerRadius = UDim.new(0, 8)
+    c.Parent = container
+    
+    local label = Instance.new("TextLabel")
+    label.Size = UDim2.new(1, -60, 1, 0)
+    label.Position = UDim2.fromOffset(12, 0)
+    label.BackgroundTransparency = 1
+    label.Text = labelText
+    label.TextColor3 = COLORS.text
+    label.TextSize = 10
+    label.Font = Enum.Font.Gotham
+    label.TextXAlignment = Enum.TextXAlignment.Left
+    label.Parent = container
+    
+    local stateBtn = Instance.new("TextButton")
+    stateBtn.Size = UDim2.fromOffset(46, 20)
+    stateBtn.Position = UDim2.new(1, -54, 0.5, -10)
+    stateBtn.BackgroundColor3 = table[key] and COLORS.success or COLORS.divider
+    stateBtn.BackgroundTransparency = 0.15
+    stateBtn.BorderSizePixel = 0
+    stateBtn.Text = table[key] and "ON" or "OFF"
+    stateBtn.TextColor3 = COLORS.text
+    stateBtn.TextSize = 9
+    stateBtn.Font = Enum.Font.GothamBold
+    stateBtn.Parent = container
+    
+    local bc = Instance.new("UICorner")
+    bc.CornerRadius = UDim.new(0, 5)
+    bc.Parent = stateBtn
+    
+    stateBtn.MouseButton1Click:Connect(function()
+        table[key] = not table[key]
+        stateBtn.Text = table[key] and "ON" or "OFF"
+        stateBtn.BackgroundColor3 = table[key] and COLORS.success or COLORS.divider
+        if callback then pcall(callback) end
+    end)
+    
+    return container
+end
 
--- Divider
-local Divider = Instance.new("Frame")
-Divider.Size = UDim2.new(0.88, 0, 0, 1)
-Divider.Position = UDim2.new(0.06, 0, 0, 202)
-Divider.BackgroundColor3 = COLORS.divider
-Divider.BorderSizePixel = 0
-Divider.Parent = SettingsPanel
+local function makeSlider(parent, y, labelText, min, max, default, callback)
+    local container = Instance.new("Frame")
+    container.Size = UDim2.new(0.94, 0, 0, 48)
+    container.Position = UDim2.new(0.03, 0, 0, y)
+    container.BackgroundColor3 = COLORS.panel
+    container.BackgroundTransparency = 0.3
+    container.BorderSizePixel = 0
+    container.Parent = parent
+    
+    local c = Instance.new("UICorner")
+    c.CornerRadius = UDim.new(0, 8)
+    c.Parent = container
+    
+    local label = Instance.new("TextLabel")
+    label.Size = UDim2.new(1, -20, 0, 16)
+    label.Position = UDim2.fromOffset(12, 4)
+    label.BackgroundTransparency = 1
+    label.Text = labelText .. ": " .. tostring(default)
+    label.TextColor3 = COLORS.text
+    label.TextSize = 10
+    label.Font = Enum.Font.Gotham
+    label.TextXAlignment = Enum.TextXAlignment.Left
+    label.Parent = container
+    
+    local sliderBg = Instance.new("Frame")
+    sliderBg.Size = UDim2.new(1, -24, 0, 6)
+    sliderBg.Position = UDim2.new(0, 12, 0, 26)
+    sliderBg.BackgroundColor3 = COLORS.divider
+    sliderBg.BorderSizePixel = 0
+    sliderBg.Parent = container
+    
+    local sbc = Instance.new("UICorner")
+    sbc.CornerRadius = UDim.new(1, 0)
+    sbc.Parent = sliderBg
+    
+    local fill = Instance.new("Frame")
+    fill.Size = UDim2.new((default - min) / (max - min), 0, 1, 0)
+    fill.BackgroundColor3 = COLORS.accent
+    fill.BorderSizePixel = 0
+    fill.Parent = sliderBg
+    
+    local fc = Instance.new("UICorner")
+    fc.CornerRadius = UDim.new(1, 0)
+    fc.Parent = fill
+    
+    local knob = Instance.new("TextButton")
+    knob.Size = UDim2.fromOffset(16, 16)
+    knob.Position = UDim2.new((default - min) / (max - min), -8, 0.5, -8)
+    knob.BackgroundColor3 = COLORS.text
+    knob.BorderSizePixel = 0
+    knob.Text = ""
+    knob.Parent = sliderBg
+    
+    local kc = Instance.new("UICorner")
+    kc.CornerRadius = UDim.new(1, 0)
+    kc.Parent = knob
+    
+    local dragging = false
+    local function updateFromInput(input)
+        local pos = sliderBg.AbsolutePosition.X
+        local size = sliderBg.AbsoluteSize.X
+        local percent = math.clamp((input.Position.X - pos) / size, 0, 1)
+        local value = math.floor(min + percent * (max - min))
+        fill.Size = UDim2.new(percent, 0, 1, 0)
+        knob.Position = UDim2.new(percent, -8, 0.5, -8)
+        label.Text = labelText .. ": " .. tostring(value)
+        if callback then pcall(callback, value) end
+    end
+    
+    knob.InputBegan:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.Touch or input.UserInputType == Enum.UserInputType.MouseButton1 then
+            dragging = true
+            updateFromInput(input)
+        end
+    end)
+    
+    sliderBg.InputBegan:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.Touch or input.UserInputType == Enum.UserInputType.MouseButton1 then
+            dragging = true
+            updateFromInput(input)
+        end
+    end)
+    
+    state.connections[#state.connections+1] = UserInputService.InputChanged:Connect(function(input)
+        if dragging and (input.UserInputType == Enum.UserInputType.Touch or input.UserInputType == Enum.UserInputType.MouseMovement) then
+            updateFromInput(input)
+        end
+    end)
+    
+    state.connections[#state.connections+1] = UserInputService.InputEnded:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.Touch or input.UserInputType == Enum.UserInputType.MouseButton1 then
+            dragging = false
+        end
+    end)
+    
+    return container
+end
 
--- Filter Label
-local FilterLabel = Instance.new("TextLabel")
-FilterLabel.Size = UDim2.new(0.88, 0, 0, 16)
-FilterLabel.Position = UDim2.new(0.06, 0, 0, 210)
-FilterLabel.BackgroundTransparency = 1
-FilterLabel.Text = "FILTER ROLE"
-FilterLabel.TextColor3 = COLORS.textDim
-FilterLabel.TextSize = 9
-FilterLabel.Font = Enum.Font.GothamBold
-FilterLabel.TextXAlignment = Enum.TextXAlignment.Left
-FilterLabel.Parent = SettingsPanel
+-- ═══════════════════════════════════════════════════════
+-- TAB: ESP
+-- ═══════════════════════════════════════════════════════
 
--- Filter buttons
-local FilterBtns = {}
-local function updateFilterButtons()
-    for role, btn in pairs(FilterBtns) do
+local espFrame = tabContents["ESP"]
+
+makeToggle(espFrame, 8, "ESP Aktif", "espEnabled", state, function()
+    if state.espEnabled then
+        for _, player in ipairs(Players:GetPlayers()) do
+            if player ~= LocalPlayer then createESP(player) end
+        end
+    end
+end)
+
+makeToggle(espFrame, 44, "Kotak Highlight", "ShowBox", SETTINGS)
+makeToggle(espFrame, 80, "Role (Killer/Survivor)", "ShowRole", SETTINGS)
+makeToggle(espFrame, 116, "Nama", "ShowName", SETTINGS)
+makeToggle(espFrame, 152, "Jarak", "ShowDistance", SETTINGS)
+makeToggle(espFrame, 188, "Darah (HP)", "ShowHealth", SETTINGS)
+
+local filterLabel = Instance.new("TextLabel")
+filterLabel.Size = UDim2.new(0.94, 0, 0, 16)
+filterLabel.Position = UDim2.new(0.03, 0, 0, 228)
+filterLabel.BackgroundTransparency = 1
+filterLabel.Text = "FILTER ROLE"
+filterLabel.TextColor3 = COLORS.textDim
+filterLabel.TextSize = 9
+filterLabel.Font = Enum.Font.GothamBold
+filterLabel.TextXAlignment = Enum.TextXAlignment.Left
+filterLabel.Parent = espFrame
+
+local filterBtns = {}
+local function updateFilterBtns()
+    for role, btn in pairs(filterBtns) do
         if SETTINGS.FilterRole == role then
             btn.BackgroundColor3 = COLORS.accent
-            btn.BackgroundTransparency = 0.15
+            btn.BackgroundTransparency = 0.1
             btn.TextColor3 = COLORS.text
         else
             btn.BackgroundColor3 = COLORS.panel
-            btn.BackgroundTransparency = 0.4
+            btn.BackgroundTransparency = 0.3
             btn.TextColor3 = COLORS.textDim
         end
     end
 end
 
 local function makeFilterBtn(text, xPos, role)
-    local Btn = Instance.new("TextButton")
-    Btn.Size = UDim2.new(0.28, 0, 0, 26)
-    Btn.Position = UDim2.new(xPos, 0, 0, 230)
-    Btn.BorderSizePixel = 0
-    Btn.Text = text
-    Btn.TextSize = 9
-    Btn.Font = Enum.Font.GothamBold
-    Btn.Parent = SettingsPanel
+    local btn = Instance.new("TextButton")
+    btn.Size = UDim2.new(0.29, 0, 0, 26)
+    btn.Position = UDim2.new(xPos, 0, 0, 250)
+    btn.BorderSizePixel = 0
+    btn.Text = text
+    btn.TextSize = 9
+    btn.Font = Enum.Font.GothamBold
+    btn.Parent = espFrame
     
     local c = Instance.new("UICorner")
     c.CornerRadius = UDim.new(0, 7)
-    c.Parent = Btn
+    c.Parent = btn
     
-    FilterBtns[role] = Btn
+    filterBtns[role] = btn
     
-    Btn.MouseButton1Click:Connect(function()
+    btn.MouseButton1Click:Connect(function()
         SETTINGS.FilterRole = role
-        updateFilterButtons()
+        updateFilterBtns()
     end)
 end
 
-makeFilterBtn("SEMUA", 0.06, "both")
-makeFilterBtn("KILLER", 0.36, "killer")
-makeFilterBtn("SURVIVOR", 0.66, "survivor")
+makeFilterBtn("SEMUA", 0.03, "both")
+makeFilterBtn("KILLER", 0.355, "killer")
+makeFilterBtn("SURVIVOR", 0.68, "survivor")
+updateFilterBtns()
 
-updateFilterButtons()
+local markBtn = Instance.new("TextButton")
+markBtn.Size = UDim2.new(0.94, 0, 0, 30)
+markBtn.Position = UDim2.new(0.03, 0, 0, 286)
+markBtn.BackgroundColor3 = COLORS.danger
+markBtn.BackgroundTransparency = 0.15
+markBtn.BorderSizePixel = 0
+markBtn.Text = "TANDAI PEMAIN TERDEKAT"
+markBtn.TextColor3 = COLORS.text
+markBtn.TextSize = 10
+markBtn.Font = Enum.Font.GothamBold
+markBtn.Parent = espFrame
 
--- Info
-local InfoFilter = Instance.new("TextLabel")
-InfoFilter.Size = UDim2.new(0.88, 0, 0, 30)
-InfoFilter.Position = UDim2.new(0.06, 0, 0, 262)
-InfoFilter.BackgroundTransparency = 1
-InfoFilter.Text = "Cuma nampilin role yang dipilih"
-InfoFilter.TextColor3 = COLORS.textDim
-InfoFilter.TextSize = 8
-InfoFilter.Font = Enum.Font.Gotham
-InfoFilter.TextWrapped = true
-InfoFilter.TextYAlignment = Enum.TextYAlignment.Top
-InfoFilter.TextXAlignment = Enum.TextXAlignment.Center
-InfoFilter.Parent = SettingsPanel
+local MBC = Instance.new("UICorner")
+MBC.CornerRadius = UDim.new(0, 8)
+MBC.Parent = markBtn
 
--- Show button (mini)
-local ShowBtn = Instance.new("TextButton")
-ShowBtn.Size = UDim2.fromOffset(40, 40)
-ShowBtn.Position = UDim2.fromOffset(16, 100)
-ShowBtn.BackgroundColor3 = COLORS.bg
-ShowBtn.BackgroundTransparency = 0.05
-ShowBtn.BorderSizePixel = 0
-ShowBtn.Text = "ESP"
-ShowBtn.TextColor3 = COLORS.accent
-ShowBtn.TextSize = 11
-ShowBtn.Font = Enum.Font.GothamBold
-ShowBtn.Visible = false
-ShowBtn.Active = true
-ShowBtn.Draggable = true
-ShowBtn.Parent = MainGui
-
-local SBC = Instance.new("UICorner")
-SBC.CornerRadius = UDim.new(0, 12)
-SBC.Parent = ShowBtn
-
-local SBStroke = Instance.new("UIStroke")
-SBStroke.Color = COLORS.accent
-SBStroke.Thickness = 1
-SBStroke.Transparency = 0.3
-SBStroke.Parent = ShowBtn
-
--- Events
-state.connections[#state.connections+1] = ToggleBtn.MouseButton1Click:Connect(function()
-    state.enabled = not state.enabled
-    if state.enabled then
-        ToggleBtn.Text = "AKTIF"
-        ToggleBtn.BackgroundColor3 = COLORS.success
-        StatusDot.BackgroundColor3 = COLORS.success
-        for _, player in ipairs(Players:GetPlayers()) do
-            if player ~= LocalPlayer then createESP(player) end
-        end
-    else
-        ToggleBtn.Text = "MATI"
-        ToggleBtn.BackgroundColor3 = COLORS.danger
-        StatusDot.BackgroundColor3 = COLORS.danger
-        for _, player in ipairs(Players:GetPlayers()) do
-            removeESP(player)
-        end
-    end
-end)
-
-state.connections[#state.connections+1] = SettingsBtn.MouseButton1Click:Connect(function()
-    SettingsPanel.Visible = not SettingsPanel.Visible
-end)
-
-state.connections[#state.connections+1] = MarkBtn.MouseButton1Click:Connect(function()
+markBtn.MouseButton1Click:Connect(function()
     local myChar = LocalPlayer.Character
     local myHRP = myChar and myChar:FindFirstChild("HumanoidRootPart")
     if not myHRP then return end
@@ -739,29 +924,247 @@ state.connections[#state.connections+1] = MarkBtn.MouseButton1Click:Connect(func
         if state.manualKiller[closest.Name] then
             state.manualKiller[closest.Name] = nil
             state.manualSurvivor[closest.Name] = true
-            print("[ESP] Marked SURVIVOR:", closest.Name)
+            print("[VD] Marked SURVIVOR:", closest.Name)
         else
             state.manualKiller[closest.Name] = true
             state.manualSurvivor[closest.Name] = nil
-            print("[ESP] Marked KILLER:", closest.Name)
+            print("[VD] Marked KILLER:", closest.Name)
         end
     end
 end)
 
-state.connections[#state.connections+1] = HideBtn.MouseButton1Click:Connect(function()
-    ControlFrame.Visible = false
-    SettingsPanel.Visible = false
-    ShowBtn.Visible = true
+-- ═══════════════════════════════════════════════════════
+-- TAB: LAG
+-- ═══════════════════════════════════════════════════════
+
+local lagFrame = tabContents["LAG"]
+
+local lagInfo = Instance.new("TextLabel")
+lagInfo.Size = UDim2.new(0.94, 0, 0, 40)
+lagInfo.Position = UDim2.new(0.03, 0, 0, 8)
+lagInfo.BackgroundColor3 = COLORS.panel
+lagInfo.BackgroundTransparency = 0.3
+lagInfo.BorderSizePixel = 0
+lagInfo.Text = "Fitur ini bantu ngurangin lag.\nHasil tergantung device & game."
+lagInfo.TextColor3 = COLORS.textDim
+lagInfo.TextSize = 9
+lagInfo.Font = Enum.Font.Gotham
+lagInfo.TextWrapped = true
+lagInfo.Parent = lagFrame
+
+local LIC = Instance.new("UICorner")
+LIC.CornerRadius = UDim.new(0, 8)
+LIC.Parent = lagInfo
+
+makeToggle(lagFrame, 56, "Hapus Partikel/Effect", "RemoveParticles", lagFixes, applyLagFixes)
+makeToggle(lagFrame, 92, "Hapus Decals", "RemoveDecals", lagFixes, applyLagFixes)
+makeToggle(lagFrame, 128, "Hapus Textures", "RemoveTextures", lagFixes, applyLagFixes)
+makeToggle(lagFrame, 164, "Matikan Shadows", "DisableShadows", lagFixes, applyLagFixes)
+makeToggle(lagFrame, 200, "Batasi Render Distance", "LimitRenderDistance", lagFixes, applyLagFixes)
+makeToggle(lagFrame, 236, "Kurangi Detail Air", "ReduceTerrain", lagFixes, applyLagFixes)
+
+local resetBtn = Instance.new("TextButton")
+resetBtn.Size = UDim2.new(0.94, 0, 0, 30)
+resetBtn.Position = UDim2.new(0.03, 0, 0, 280)
+resetBtn.BackgroundColor3 = COLORS.warning
+resetBtn.BackgroundTransparency = 0.15
+resetBtn.BorderSizePixel = 0
+resetBtn.Text = "RESET SEMUA LAG FIX"
+resetBtn.TextColor3 = COLORS.text
+resetBtn.TextSize = 10
+resetBtn.Font = Enum.Font.GothamBold
+resetBtn.Parent = lagFrame
+
+local RBC = Instance.new("UICorner")
+RBC.CornerRadius = UDim.new(0, 8)
+RBC.Parent = resetBtn
+
+resetBtn.MouseButton1Click:Connect(function()
+    for k, _ in pairs(lagFixes) do lagFixes[k] = false end
+    resetLagFixes()
+    print("[VD] Lag fixes reset")
 end)
 
-state.connections[#state.connections+1] = ShowBtn.MouseButton1Click:Connect(function()
-    ControlFrame.Visible = true
-    ShowBtn.Visible = false
+-- ═══════════════════════════════════════════════════════
+-- TAB: PLAYER (SPEED BOOT NATURAL)
+-- ═══════════════════════════════════════════════════════
+
+local playerFrame = tabContents["PLAYER"]
+
+-- Info banner
+local speedInfo = Instance.new("TextLabel")
+speedInfo.Size = UDim2.new(0.94, 0, 0, 60)
+speedInfo.Position = UDim2.new(0.03, 0, 0, 8)
+speedInfo.BackgroundColor3 = COLORS.panel
+speedInfo.BackgroundTransparency = 0.3
+speedInfo.BorderSizePixel = 0
+speedInfo.Text = "SPEED BOOT NATURAL\nBoost dari kecepatan asli game.\nKalau game slow → kita ikut slow."
+speedInfo.TextColor3 = COLORS.textDim
+speedInfo.TextSize = 9
+speedInfo.Font = Enum.Font.Gotham
+speedInfo.TextWrapped = true
+speedInfo.TextYAlignment = Enum.TextYAlignment.Center
+speedInfo.Parent = playerFrame
+
+local SIC = Instance.new("UICorner")
+SIC.CornerRadius = UDim.new(0, 8)
+SIC.Parent = speedInfo
+
+-- Toggle
+makeToggle(playerFrame, 76, "Speed Boot Aktif", "SpeedEnabled", SETTINGS, applyPlayerMods)
+
+-- Multiplier label
+local multLabel = Instance.new("TextLabel")
+multLabel.Size = UDim2.new(0.94, 0, 0, 16)
+multLabel.Position = UDim2.new(0.03, 0, 0, 116)
+multLabel.BackgroundTransparency = 1
+multLabel.Text = "MULTIPLIER: " .. string.format("%.2fx", SETTINGS.SpeedMultiplier)
+multLabel.TextColor3 = COLORS.textDim
+multLabel.TextSize = 9
+multLabel.Font = Enum.Font.GothamBold
+multLabel.TextXAlignment = Enum.TextXAlignment.Left
+multLabel.Parent = playerFrame
+
+-- Preset buttons
+local presets = {
+    {label = "1.10x", value = 1.10},
+    {label = "1.25x", value = 1.25},
+    {label = "1.50x", value = 1.50},
+    {label = "2.00x", value = 2.00},
+}
+
+local presetBtns = {}
+local function updatePresetHighlight()
+    for _, data in ipairs(presetBtns) do
+        if math.abs(data.value - SETTINGS.SpeedMultiplier) < 0.01 then
+            data.btn.BackgroundColor3 = COLORS.accent
+            data.btn.BackgroundTransparency = 0.1
+            data.btn.TextColor3 = COLORS.text
+        else
+            data.btn.BackgroundColor3 = COLORS.panel
+            data.btn.BackgroundTransparency = 0.3
+            data.btn.TextColor3 = COLORS.textDim
+        end
+    end
+end
+
+for i, data in ipairs(presets) do
+    local btn = Instance.new("TextButton")
+    btn.Size = UDim2.new(0.22, 0, 0, 26)
+    btn.Position = UDim2.new(0.03 + (i-1) * 0.24, 0, 0, 136)
+    btn.BorderSizePixel = 0
+    btn.Text = data.label
+    btn.TextSize = 9
+    btn.Font = Enum.Font.GothamBold
+    btn.Parent = playerFrame
+    
+    local c = Instance.new("UICorner")
+    c.CornerRadius = UDim.new(0, 6)
+    c.Parent = btn
+    
+    table.insert(presetBtns, {btn = btn, value = data.value})
+    
+    btn.MouseButton1Click:Connect(function()
+        SETTINGS.SpeedMultiplier = data.value
+        multLabel.Text = "MULTIPLIER: " .. string.format("%.2fx", SETTINGS.SpeedMultiplier)
+        updatePresetHighlight()
+        applyPlayerMods()
+    end)
+end
+updatePresetHighlight()
+
+-- JumpPower
+makeSlider(playerFrame, 174, "JumpPower", 50, 200, SETTINGS.JumpPower, function(v)
+    SETTINGS.JumpPower = v
+    local char = LocalPlayer.Character
+    if char then
+        local hum = char:FindFirstChildOfClass("Humanoid")
+        if hum then
+            hum.JumpPower = v
+            hum.UseJumpPower = true
+        end
+    end
+end)
+
+makeToggle(playerFrame, 230, "Anti-Fling", "AntiFlingEnabled", SETTINGS)
+makeToggle(playerFrame, 266, "Infinite Jump", "InfJumpEnabled", SETTINGS)
+
+-- ═══════════════════════════════════════════════════════
+-- TAB: MISC
+-- ═══════════════════════════════════════════════════════
+
+local miscFrame = tabContents["MISC"]
+
+makeToggle(miscFrame, 8, "Fullbright (Terang)", "FullbrightEnabled", SETTINGS, applyFullbright)
+makeToggle(miscFrame, 44, "No Fog (Hilangkan Kabut)", "NoFogEnabled", SETTINGS, applyNoFog)
+makeToggle(miscFrame, 80, "Anti-AFK", "antiAfkEnabled", state)
+
+local miscInfo = Instance.new("TextLabel")
+miscInfo.Size = UDim2.new(0.94, 0, 0, 60)
+miscInfo.Position = UDim2.new(0.03, 0, 0, 120)
+miscInfo.BackgroundColor3 = COLORS.panel
+miscInfo.BackgroundTransparency = 0.3
+miscInfo.BorderSizePixel = 0
+miscInfo.Text = "Anti-AFK otomatis aktif\nbiar gak di-kick pas AFK.\nFullbright bikin game gak gelap."
+miscInfo.TextColor3 = COLORS.textDim
+miscInfo.TextSize = 9
+miscInfo.Font = Enum.Font.Gotham
+miscInfo.TextWrapped = true
+miscInfo.TextYAlignment = Enum.TextYAlignment.Top
+miscInfo.Parent = miscFrame
+
+local MIC = Instance.new("UICorner")
+MIC.CornerRadius = UDim.new(0, 8)
+MIC.Parent = miscInfo
+
+-- ═══════════════════════════════════════════════════════
+-- EVENTS
+-- ═══════════════════════════════════════════════════════
+
+state.connections[#state.connections+1] = Players.PlayerAdded:Connect(function(player)
+    player.CharacterAdded:Connect(function()
+        task.wait(0.5)
+        if state.espEnabled then createESP(player) end
+    end)
+    if player.Character and state.espEnabled then createESP(player) end
+end)
+
+state.connections[#state.connections+1] = Players.PlayerRemoving:Connect(function(player)
+    removeESP(player)
+end)
+
+state.connections[#state.connections+1] = UserInputService.JumpRequest:Connect(function()
+    if SETTINGS.InfJumpEnabled then
+        local char = LocalPlayer.Character
+        if char then
+            local hum = char:FindFirstChildOfClass("Humanoid")
+            if hum then hum:ChangeState(Enum.HumanoidStateType.Jumping) end
+        end
+    end
+end)
+
+task.spawn(function()
+    while state.running do
+        task.wait(0.1)
+        if SETTINGS.AntiFlingEnabled then
+            local char = LocalPlayer.Character
+            if char then
+                local hrp = char:FindFirstChild("HumanoidRootPart")
+                if hrp then
+                    local vel = hrp.AssemblyLinearVelocity.Magnitude
+                    if vel > 500 then
+                        hrp.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
+                        hrp.AssemblyAngularVelocity = Vector3.new(0, 0, 0)
+                    end
+                end
+            end
+        end
+    end
 end)
 
 task.spawn(function()
     while state.running and MainGui.Parent do
-        task.wait(SETTINGS.UpdateRate)
+        task.wait(0.1)
         if not state.running then break end
         pcall(updateESP)
     end
@@ -769,7 +1172,19 @@ end)
 
 state.connections[#state.connections+1] = LocalPlayer.CharacterAdded:Connect(function()
     task.wait(1)
-    if not state.enabled then return end
+    -- ⭐ Reset speed monitor tiap respawn
+    disconnectSpeedMonitor()
+    task.wait(0.5)
+    local char = LocalPlayer.Character
+    if char then
+        local hum = char:FindFirstChildOfClass("Humanoid")
+        if hum then
+            gameBaseSpeed = hum.WalkSpeed
+            applySpeedBoot()
+        end
+    end
+    applyPlayerMods()
+    if not state.espEnabled then return end
     for _, player in ipairs(Players:GetPlayers()) do
         if player ~= LocalPlayer and not state.esps[player] then
             createESP(player)
@@ -777,5 +1192,46 @@ state.connections[#state.connections+1] = LocalPlayer.CharacterAdded:Connect(fun
     end
 end)
 
-print("[ESP v6] Loaded! UI Redesign - Comfortable Color Scheme")
-print("[ESP v6] Warna: Soft Blue | Font: Gotham | Layout: Clean")
+state.connections[#state.connections+1] = HideBtn.MouseButton1Click:Connect(function()
+    MainFrame.Visible = false
+    if not MainGui:FindFirstChild("ShowBtn") then
+        local showBtn = Instance.new("TextButton")
+        showBtn.Name = "ShowBtn"
+        showBtn.Size = UDim2.fromOffset(44, 44)
+        showBtn.Position = UDim2.fromOffset(16, 80)
+        showBtn.BackgroundColor3 = COLORS.bg
+        showBtn.BackgroundTransparency = 0.05
+        showBtn.BorderSizePixel = 0
+        showBtn.Text = "VD"
+        showBtn.TextColor3 = COLORS.accent
+        showBtn.TextSize = 12
+        showBtn.Font = Enum.Font.GothamBold
+        showBtn.Active = true
+        showBtn.Draggable = true
+        showBtn.Parent = MainGui
+        
+        local sc = Instance.new("UICorner")
+        sc.CornerRadius = UDim.new(0, 12)
+        sc.Parent = showBtn
+        
+        local s = Instance.new("UIStroke")
+        s.Color = COLORS.accent
+        s.Thickness = 1
+        s.Transparency = 0.3
+        s.Parent = showBtn
+        
+        showBtn.MouseButton1Click:Connect(function()
+            MainFrame.Visible = true
+            showBtn:Destroy()
+        end)
+    end
+end)
+
+-- Init
+applyPlayerMods()
+for _, player in ipairs(Players:GetPlayers()) do
+    if player ~= LocalPlayer then createESP(player) end
+end
+
+print("[VD TOOLS v2] Loaded!")
+print("[VD TOOLS v2] Tab: ESP | LAG | PLAYER (Speed Boot Natural) | MISC")
