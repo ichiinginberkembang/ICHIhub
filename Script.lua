@@ -354,22 +354,15 @@ end
 
 local function klikTombol(btn)
     if not isVisible(btn) then return false end
-    
-    -- Metode 1: firesignal
     pcall(function() firesignal(btn.MouseButton1Click) end)
     task.wait(0.03)
-    
-    -- Metode 2: firesignal Down + Up
     pcall(function()
         firesignal(btn.MouseButton1Down)
         task.wait(0.02)
         firesignal(btn.MouseButton1Up)
     end)
     task.wait(0.03)
-    
-    -- Metode 3: Activate
     pcall(function() btn:Activate() end)
-    
     return true
 end
 
@@ -411,186 +404,212 @@ local function rounded(obj, r)
     make("UICorner", obj, {CornerRadius = UDim.new(0, r or 10)})
 end
 
+-- ⭐ UI KECIL: 200x270
 local MainFrame = make("Frame", ScreenGui, {
     Name = "Window",
     Position = UDim2.fromOffset(18, 150),
-    Size = UDim2.fromOffset(280, 340),
+    Size = UDim2.fromOffset(200, 270),
     BackgroundColor3 = colors.bg,
     BorderSizePixel = 0,
 })
-rounded(MainFrame, 14)
+rounded(MainFrame, 12)
 
 local windowScale = make("UIScale", MainFrame, {Scale = 1})
 make("UIStroke", MainFrame, {Color = Color3.fromRGB(62, 72, 104), Thickness = 1, Transparency = 0.3})
 
+-- ⭐ HEADER DENGAN LOGO
 local Header = make("Frame", MainFrame, {
-    Size = UDim2.new(1, 0, 0, 34),
+    Size = UDim2.new(1, 0, 0, 32),
     BackgroundColor3 = colors.accent,
     BorderSizePixel = 0,
     Active = true,
 })
-rounded(Header, 14)
+rounded(Header, 12)
+
+-- ⭐ LOGO GAMBAR
+local Logo = make("ImageLabel", Header, {
+    Size = UDim2.fromOffset(22, 22),
+    Position = UDim2.fromOffset(8, 5),
+    BackgroundTransparency = 1,
+    Image = "rbxassetid://7733771128",  -- ⭐ Logo (bisa diganti)
+    ImageColor3 = Color3.fromRGB(255, 255, 255),
+})
 
 make("TextLabel", Header, {
-    Size = UDim2.new(1, -40, 1, 0),
-    Position = UDim2.fromOffset(12, 0),
+    Size = UDim2.new(1, -60, 1, 0),
+    Position = UDim2.fromOffset(34, 0),
     BackgroundTransparency = 1,
-    Text = "AUTO JAWAB PRO",
+    Text = "AUTO JAWAB",
     TextColor3 = colors.text,
-    TextSize = 13,
+    TextSize = 11,
     Font = Enum.Font.GothamBold,
     TextXAlignment = Enum.TextXAlignment.Left,
 })
 
 local HideBtn = make("TextButton", Header, {
-    Size = UDim2.fromOffset(24, 24),
-    Position = UDim2.new(1, -28, 0, 5),
+    Size = UDim2.fromOffset(20, 20),
+    Position = UDim2.new(1, -24, 0, 6),
     BackgroundColor3 = colors.red,
     BorderSizePixel = 0,
     Text = "X",
     TextColor3 = colors.text,
-    TextSize = 12,
+    TextSize = 10,
     Font = Enum.Font.GothamBold,
 })
-rounded(HideBtn, 12)
+rounded(HideBtn, 10)
 
 local Body = make("Frame", MainFrame, {
-    Position = UDim2.fromOffset(0, 34),
-    Size = UDim2.new(1, 0, 1, -34),
+    Position = UDim2.fromOffset(0, 32),
+    Size = UDim2.new(1, 0, 1, -32),
     BackgroundTransparency = 1,
 })
 
+-- Toggle ON/OFF
 local ToggleBtn = make("TextButton", Body, {
-    Size = UDim2.new(0.9, 0, 0, 38),
-    Position = UDim2.new(0.05, 0, 0, 10),
+    Size = UDim2.new(0.9, 0, 0, 30),
+    Position = UDim2.new(0.05, 0, 0, 6),
     BackgroundColor3 = colors.red,
     BorderSizePixel = 0,
     Text = "OFF",
     TextColor3 = colors.text,
-    TextSize = 15,
+    TextSize = 12,
     Font = Enum.Font.GothamBold,
 })
-rounded(ToggleBtn, 8)
+rounded(ToggleBtn, 6)
 
+-- Random delay
 local RandomBtn = make("TextButton", Body, {
-    Size = UDim2.new(0.9, 0, 0, 26),
-    Position = UDim2.new(0.05, 0, 0, 54),
+    Size = UDim2.new(0.9, 0, 0, 20),
+    Position = UDim2.new(0.05, 0, 0, 40),
     BackgroundColor3 = colors.card,
     BorderSizePixel = 0,
-    Text = "RANDOM DELAY: OFF",
+    Text = "RANDOM: OFF",
     TextColor3 = colors.text,
-    TextSize = 10,
+    TextSize = 9,
     Font = Enum.Font.GothamBold,
 })
-rounded(RandomBtn, 6)
+rounded(RandomBtn, 5)
 
+-- Soal label
 local SoalLabel = make("TextLabel", Body, {
-    Size = UDim2.new(0.9, 0, 0, 16),
-    Position = UDim2.new(0.05, 0, 0, 86),
+    Size = UDim2.new(0.9, 0, 0, 14),
+    Position = UDim2.new(0.05, 0, 0, 64),
     BackgroundTransparency = 1,
     Text = "Soal: -",
     TextColor3 = colors.muted,
-    TextSize = 9,
+    TextSize = 8,
     Font = Enum.Font.Gotham,
     TextXAlignment = Enum.TextXAlignment.Left,
 })
 
+-- Jawaban label
 local JawabanLabel = make("TextLabel", Body, {
-    Size = UDim2.new(0.9, 0, 0, 34),
-    Position = UDim2.new(0.05, 0, 0, 104),
+    Size = UDim2.new(0.9, 0, 0, 26),
+    Position = UDim2.new(0.05, 0, 0, 80),
     BackgroundColor3 = colors.green,
     BackgroundTransparency = 0.3,
     Text = "-",
     TextColor3 = Color3.fromRGB(255, 255, 255),
-    TextSize = 20,
+    TextSize = 15,
     Font = Enum.Font.GothamBold,
 })
-rounded(JawabanLabel, 8)
+rounded(JawabanLabel, 6)
 
+-- Speed title
 local SpeedTitle = make("TextLabel", Body, {
-    Size = UDim2.new(0.9, 0, 0, 14),
-    Position = UDim2.new(0.05, 0, 0, 146),
+    Size = UDim2.new(0.9, 0, 0, 12),
+    Position = UDim2.new(0.05, 0, 0, 110),
     BackgroundTransparency = 1,
     Text = "Delay: 0.8s",
     TextColor3 = colors.muted,
-    TextSize = 10,
+    TextSize = 8,
     Font = Enum.Font.GothamBold,
     TextXAlignment = Enum.TextXAlignment.Left,
 })
 
+-- Slider
 local SliderBg = make("Frame", Body, {
-    Size = UDim2.new(0.9, 0, 0, 10),
-    Position = UDim2.new(0.05, 0, 0, 164),
+    Size = UDim2.new(0.9, 0, 0, 8),
+    Position = UDim2.new(0.05, 0, 0, 126),
     BackgroundColor3 = Color3.fromRGB(60, 60, 60),
     BorderSizePixel = 0,
 })
-rounded(SliderBg, 5)
+rounded(SliderBg, 4)
 
 local SliderFill = make("Frame", SliderBg, {
     Size = UDim2.new(0.14, 0, 1, 0),
     BackgroundColor3 = colors.accent,
     BorderSizePixel = 0,
 })
-rounded(SliderFill, 5)
+rounded(SliderFill, 4)
 
 local SliderKnob = make("TextButton", SliderBg, {
-    Size = UDim2.fromOffset(20, 20),
-    Position = UDim2.new(0.14, -10, 0, -5),
+    Size = UDim2.fromOffset(16, 16),
+    Position = UDim2.new(0.14, -8, 0, -4),
     BackgroundColor3 = Color3.fromRGB(255, 255, 255),
     BorderSizePixel = 0,
     Text = "",
 })
-rounded(SliderKnob, 10)
+rounded(SliderKnob, 8)
 
+-- Status
 local StatusLabel = make("TextLabel", Body, {
-    Size = UDim2.new(0.9, 0, 0, 14),
-    Position = UDim2.new(0.05, 0, 0, 184),
+    Size = UDim2.new(0.9, 0, 0, 12),
+    Position = UDim2.new(0.05, 0, 0, 142),
     BackgroundTransparency = 1,
     Text = "Status: Idle",
     TextColor3 = colors.muted,
-    TextSize = 9,
+    TextSize = 8,
     Font = Enum.Font.Gotham,
     TextXAlignment = Enum.TextXAlignment.Left,
 })
 
+-- Hint
 local HintLabel = make("TextLabel", Body, {
-    Size = UDim2.new(0.9, 0, 0, 12),
-    Position = UDim2.new(0.05, 0, 0, 200),
+    Size = UDim2.new(0.9, 0, 0, 10),
+    Position = UDim2.new(0.05, 0, 0, 156),
     BackgroundTransparency = 1,
     Text = "Cepat | Natural | Lambat",
     TextColor3 = colors.muted,
-    TextSize = 8,
+    TextSize = 7,
     Font = Enum.Font.Gotham,
     TextXAlignment = Enum.TextXAlignment.Center,
 })
 
+-- Info
 local InfoLabel = make("TextLabel", Body, {
-    Size = UDim2.new(0.9, 0, 0, 60),
-    Position = UDim2.new(0.05, 0, 0, 218),
+    Size = UDim2.new(0.9, 0, 0, 62),
+    Position = UDim2.new(0.05, 0, 0, 172),
     BackgroundColor3 = colors.card,
     BackgroundTransparency = 0.5,
-    Text = "Fitur:\nRecursive Parser | Sequence | Unicode\nGraphic (Luas/Jam) | Multi-Click",
+    Text = "Recursive Parser | Sequence | Unicode\nGraphic (Luas/Jam) | Multi-Click\nRandom Delay | Anti-Rerun",
     TextColor3 = colors.muted,
-    TextSize = 9,
+    TextSize = 7,
     Font = Enum.Font.Gotham,
     TextWrapped = true,
 })
 rounded(InfoLabel, 6)
 
+-- Show button
 local ShowBtn = make("TextButton", ScreenGui, {
-    Size = UDim2.fromOffset(50, 50),
+    Size = UDim2.fromOffset(40, 40),
     Position = UDim2.fromOffset(18, 150),
     BackgroundColor3 = colors.accent,
     BorderSizePixel = 0,
-    Text = "AJ",
-    TextColor3 = colors.text,
-    TextSize = 18,
-    Font = Enum.Font.GothamBold,
+    Text = "",
     Visible = false,
     Active = true,
     Draggable = true,
 })
-rounded(ShowBtn, 25)
+rounded(ShowBtn, 20)
+
+make("ImageLabel", ShowBtn, {
+    Size = UDim2.new(0.7, 0, 0.7, 0),
+    Position = UDim2.new(0.15, 0, 0.15, 0),
+    BackgroundTransparency = 1,
+    Image = "rbxassetid://7733771128",
+    ImageColor3 = Color3.fromRGB(255, 255, 255),
+})
 
 local sliderDragging = false
 local headerDragging = false
@@ -602,7 +621,7 @@ local function updateFromInput(input)
     local percent = math.clamp((input.Position.X - pos) / size, 0, 1)
     settings.fixed = 0.1 + percent * 4.9
     SliderFill.Size = UDim2.new(percent, 0, 1, 0)
-    SliderKnob.Position = UDim2.new(percent, -10, 0, -5)
+    SliderKnob.Position = UDim2.new(percent, -8, 0, -4)
     if settings.mode == "random" then
         settings.minimum = settings.fixed
         settings.maximum = settings.fixed + 1.2
@@ -660,8 +679,8 @@ local function fitWindow()
     local camera = workspace.CurrentCamera
     if not camera then return end
     local viewport = camera.ViewportSize
-    windowScale.Scale = math.min(1, math.max(0.5, (viewport.X - 24) / 280))
-    local w, h = 280 * windowScale.Scale, 340 * windowScale.Scale
+    windowScale.Scale = math.min(1, math.max(0.5, (viewport.X - 24) / 200))
+    local w, h = 200 * windowScale.Scale, 270 * windowScale.Scale
     MainFrame.Position = UDim2.fromOffset(
         math.clamp(MainFrame.Position.X.Offset, 8, math.max(8, viewport.X - w - 8)),
         math.clamp(MainFrame.Position.Y.Offset, 8, math.max(8, viewport.Y - h - 8))
@@ -693,7 +712,7 @@ task.spawn(function()
                 return
             end
             
-            SoalLabel.Text = "Soal: " .. soal:sub(1, 30)
+            SoalLabel.Text = "Soal: " .. soal:sub(1, 24)
             
             if soal == lastSoal then return end
             lastSoal = soal
@@ -764,7 +783,7 @@ task.spawn(function()
             end
             
             if not target then
-                StatusLabel.Text = "Tombol " .. display .. " gak ada"
+                StatusLabel.Text = "Tombol gak ada"
                 JawabanLabel.BackgroundColor3 = Color3.fromRGB(200, 100, 0)
                 return
             end
@@ -781,7 +800,7 @@ task.spawn(function()
         end)
         
         if not ok then
-            StatusLabel.Text = "Error: " .. tostring(err):sub(1, 30)
+            StatusLabel.Text = "Error"
         end
     end
 end)
@@ -805,12 +824,12 @@ RandomBtn.MouseButton1Click:Connect(function()
         settings.mode = "random"
         settings.minimum = settings.fixed
         settings.maximum = settings.fixed + 1.2
-        RandomBtn.Text = "RANDOM DELAY: ON"
+        RandomBtn.Text = "RANDOM: ON"
         RandomBtn.BackgroundColor3 = colors.green
         SpeedTitle.Text = string.format("Delay: %.1fs - %.1fs", settings.minimum, settings.maximum)
     else
         settings.mode = "fixed"
-        RandomBtn.Text = "RANDOM DELAY: OFF"
+        RandomBtn.Text = "RANDOM: OFF"
         RandomBtn.BackgroundColor3 = colors.card
         SpeedTitle.Text = string.format("Delay: %.1fs", settings.fixed)
     end
@@ -834,5 +853,5 @@ LocalPlayer.CharacterAdded:Connect(function()
     end
 end)
 
-notif("Auto Jawab Pro Max", "Loaded! Recursive Parser + Sequence + Graphic", 5)
+notif("Auto Jawab Pro Max", "Loaded! UI Compact + Logo", 5)
 print("[AUTO JAWAB PRO MAX] Running...")
