@@ -1,11 +1,8 @@
--- [[ SIMPLE ESP v2 — KILLER vs SURVIVOR ]]
-
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 local LocalPlayer = Players.LocalPlayer
 local Camera = workspace.CurrentCamera
 
--- ⭐ KONFIGURASI
 local SETTINGS = {
     Enabled = true,
     ShowBox = true,
@@ -16,29 +13,21 @@ local SETTINGS = {
     MaxDistance = 1000,
     TextSize = 14,
     UpdateRate = 0.1,
-    
-    -- ⭐ WARNA ROLE
-    SurvivorColor = Color3.fromRGB(0, 200, 255),    -- 🔵 Biru
-    KillerColor = Color3.fromRGB(255, 30, 30),      -- 🔴 Merah
-    UnknownColor = Color3.fromRGB(200, 200, 200),   -- ⚪ Abu
-    
+    SurvivorColor = Color3.fromRGB(0, 200, 255),
+    KillerColor = Color3.fromRGB(255, 30, 30),
+    UnknownColor = Color3.fromRGB(200, 200, 200),
     FillTransparency = 0.7,
 }
 
--- ⭐ MANUAL OVERRIDE (isi nama killer kalau auto-detect gagal)
--- Contoh: MANUAL_KILLER["PlayerName"] = true
 local MANUAL_KILLER = {}
 local MANUAL_SURVIVOR = {}
 
 local ESP_OBJECTS = {}
 
--- ⭐ DETEKSI ROLE
 local function getRole(player)
-    -- 1. Cek manual override dulu
     if MANUAL_KILLER[player.Name] then return "killer" end
     if MANUAL_SURVIVOR[player.Name] then return "survivor" end
     
-    -- 2. Cek player.Team
     if player.Team then
         local teamName = player.Team.Name:lower()
         if teamName:find("killer") or teamName:find("murder") or teamName:find("hunter") then
@@ -49,14 +38,12 @@ local function getRole(player)
         end
     end
     
-    -- 3. Cek TeamColor
     if player.TeamColor then
         local color = player.TeamColor.Color
         if color.R > 0.6 and color.G < 0.4 then return "killer" end
         if color.B > 0.6 and color.R < 0.4 then return "survivor" end
     end
     
-    -- 4. Cek attribute di player
     local ok, role = pcall(function()
         return player:GetAttribute("Role") or player:GetAttribute("role") or player:GetAttribute("Team")
     end)
@@ -66,7 +53,6 @@ local function getRole(player)
         if r:find("survivor") or r:find("innocent") then return "survivor" end
     end
     
-    -- 5. Cek character (killer biasanya bawa senjata)
     local char = player.Character
     if char then
         for _, child in ipairs(char:GetChildren()) do
@@ -79,7 +65,6 @@ local function getRole(player)
             end
         end
         
-        -- Cek attribute di character
         local ok2, role2 = pcall(function()
             return char:GetAttribute("Role") or char:GetAttribute("role")
         end)
@@ -93,14 +78,12 @@ local function getRole(player)
     return "unknown"
 end
 
--- ⭐ WARNA BERDASARKAN ROLE
 local function getColor(role)
     if role == "killer" then return SETTINGS.KillerColor end
     if role == "survivor" then return SETTINGS.SurvivorColor end
     return SETTINGS.UnknownColor
 end
 
--- ⭐ BUAT ESP
 local function createESP(player)
     if player == LocalPlayer then return end
     if ESP_OBJECTS[player] then return end
@@ -128,7 +111,6 @@ local function createESP(player)
     container.BackgroundTransparency = 1
     container.Parent = billboard
     
-    -- ⭐ Role Label
     local roleLabel = Instance.new("TextLabel")
     roleLabel.Size = UDim2.new(1, 0, 0, 18)
     roleLabel.Position = UDim2.new(0, 0, 0, 0)
@@ -140,7 +122,6 @@ local function createESP(player)
     roleLabel.Font = Enum.Font.GothamBold
     roleLabel.Parent = container
     
-    -- Nama
     local nameLabel = Instance.new("TextLabel")
     nameLabel.Size = UDim2.new(1, 0, 0, 18)
     nameLabel.Position = UDim2.new(0, 0, 0, 18)
@@ -152,7 +133,6 @@ local function createESP(player)
     nameLabel.Font = Enum.Font.GothamBold
     nameLabel.Parent = container
     
-    -- Jarak
     local distanceLabel = Instance.new("TextLabel")
     distanceLabel.Size = UDim2.new(1, 0, 0, 14)
     distanceLabel.Position = UDim2.new(0, 0, 0, 36)
@@ -165,7 +145,6 @@ local function createESP(player)
     distanceLabel.Font = Enum.Font.Gotham
     distanceLabel.Parent = container
     
-    -- Health
     local healthLabel = Instance.new("TextLabel")
     healthLabel.Size = UDim2.new(1, 0, 0, 14)
     healthLabel.Position = UDim2.new(0, 0, 0, 50)
@@ -187,7 +166,6 @@ local function createESP(player)
     ESP_OBJECTS[player] = espData
 end
 
--- ⭐ HAPUS ESP
 local function removeESP(player)
     local data = ESP_OBJECTS[player]
     if not data then return end
@@ -196,7 +174,6 @@ local function removeESP(player)
     ESP_OBJECTS[player] = nil
 end
 
--- ⭐ UPDATE ESP
 local function updateESP()
     if not SETTINGS.Enabled then
         for _, data in pairs(ESP_OBJECTS) do
@@ -230,7 +207,6 @@ local function updateESP()
                 data.Highlight.Enabled = false
                 data.Billboard.Enabled = false
             else
-                -- ⭐ DETEKSI ROLE
                 local role = getRole(player)
                 local color = getColor(role)
                 
@@ -243,17 +219,16 @@ local function updateESP()
                 data.Billboard.Enabled = true
                 data.Billboard.Adornee = hrp
                 
-                -- ⭐ ROLE TEXT
                 if role == "killer" then
-                    data.RoleLabel.Text = "🔴 KILLER"
+                    data.RoleLabel.Text = "KILLER"
                     data.RoleLabel.TextColor3 = color
                     data.RoleLabel.Visible = SETTINGS.ShowRole
                 elseif role == "survivor" then
-                    data.RoleLabel.Text = "🔵 SURVIVOR"
+                    data.RoleLabel.Text = "SURVIVOR"
                     data.RoleLabel.TextColor3 = color
                     data.RoleLabel.Visible = SETTINGS.ShowRole
                 else
-                    data.RoleLabel.Text = "❓ UNKNOWN"
+                    data.RoleLabel.Text = "UNKNOWN"
                     data.RoleLabel.TextColor3 = color
                     data.RoleLabel.Visible = SETTINGS.ShowRole
                 end
@@ -282,7 +257,6 @@ local function updateESP()
     end
 end
 
--- ⭐ PLAYER EVENTS
 Players.PlayerAdded:Connect(function(player)
     player.CharacterAdded:Connect(function()
         task.wait(0.5)
@@ -301,7 +275,6 @@ for _, player in ipairs(Players:GetPlayers()) do
     end
 end
 
--- ⭐ GUI CONTROL
 local MainGui = Instance.new("ScreenGui")
 MainGui.Name = "ESPControlGui"
 MainGui.ResetOnSpawn = false
@@ -337,7 +310,6 @@ local TB = Instance.new("UICorner")
 TB.CornerRadius = UDim.new(0, 6)
 TB.Parent = ToggleBtn
 
--- ⭐ TOMBOL MARK KILLER
 local MarkKillerBtn = Instance.new("TextButton")
 MarkKillerBtn.Size = UDim2.new(0.9, 0, 0, 24)
 MarkKillerBtn.Position = UDim2.new(0.05, 0, 0, 40)
@@ -380,7 +352,6 @@ ToggleBtn.MouseButton1Click:Connect(function()
     end
 end)
 
--- ⭐ MARK KILLER MANUAL (player terdekat)
 MarkKillerBtn.MouseButton1Click:Connect(function()
     local myChar = LocalPlayer.Character
     local myHRP = myChar and myChar:FindFirstChild("HumanoidRootPart")
@@ -401,7 +372,6 @@ MarkKillerBtn.MouseButton1Click:Connect(function()
     end
     
     if closest then
-        -- Toggle mark
         if MANUAL_KILLER[closest.Name] then
             MANUAL_KILLER[closest.Name] = nil
             MANUAL_SURVIVOR[closest.Name] = true
@@ -414,14 +384,12 @@ MarkKillerBtn.MouseButton1Click:Connect(function()
     end
 end)
 
--- ⭐ LOOP UTAMA
 task.spawn(function()
     while task.wait(SETTINGS.UpdateRate) do
         pcall(updateESP)
     end
 end)
 
--- ⭐ RESPAWN
 LocalPlayer.CharacterAdded:Connect(function()
     task.wait(1)
     for _, player in ipairs(Players:GetPlayers()) do
