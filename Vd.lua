@@ -1,7 +1,7 @@
--- [[ VD TOOLS v7 — Bolong Style + Brutal Anti-Lag + 5 Preset Speed ]]
+-- [[ VD TOOLS v9 FINAL — Bolong Style + Brutal Anti-Lag + Auto Gen + 6 Preset Speed ]]
 
 local env = (getgenv and getgenv()) or _G
-for _, name in ipairs({"VDTools_v1", "VDTools_v2", "VDTools_v3", "VDTools_v4", "VDTools_v5", "VDTools_v6", "VDTools_v7", "SimpleESP_KillerSurvivor"}) do
+for _, name in ipairs({"VDTools_v1","VDTools_v2","VDTools_v3","VDTools_v4","VDTools_v5","VDTools_v6","VDTools_v7","VDTools_v8","VDTools_v9","AutoGenerator_VD","SimpleESP_KillerSurvivor"}) do
     local old = env[name]
     if type(old) == "table" then
         old.running = false
@@ -18,6 +18,7 @@ for _, name in ipairs({"VDTools_v1", "VDTools_v2", "VDTools_v3", "VDTools_v4", "
                 if esp.Billboard then esp.Billboard:Destroy() end
             end)
         end
+        if old.gui then pcall(function() old.gui:Destroy() end) end
     end
 end
 
@@ -25,6 +26,7 @@ local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 local Lighting = game:GetService("Lighting")
 local UserInputService = game:GetService("UserInputService")
+local VirtualInputManager = game:GetService("VirtualInputManager")
 local LocalPlayer = Players.LocalPlayer
 local Camera = workspace.CurrentCamera
 
@@ -40,15 +42,18 @@ local state = {
     speedMonitorConn = nil,
     brutalLagEnabled = false,
     brutalLagConn = nil,
+    autoGenEnabled = false,
+    autoGenMaxDist = 15,
+    autoGenClickCooldown = 0.15,
+    autoGenLastClick = 0,
 }
-env.VDTools_v7 = state
+env.VDTools_v9 = state
 
 local C = {
     bg = Color3.fromRGB(14, 14, 18),
     panel = Color3.fromRGB(22, 22, 28),
     panelLight = Color3.fromRGB(30, 30, 38),
     sidebar = Color3.fromRGB(18, 18, 24),
-    hover = Color3.fromRGB(38, 38, 48),
     text = Color3.fromRGB(240, 240, 245),
     textDim = Color3.fromRGB(140, 140, 155),
     accent = Color3.fromRGB(120, 130, 200),
@@ -272,16 +277,94 @@ local function updateESP()
 end
 
 -- ═══════════════════════════════════════════════════════
+-- AUTO GENERATOR
+-- ═══════════════════════════════════════════════════════
+
+local function clickAt(x, y)
+    pcall(function()
+        VirtualInputManager:SendMouseButtonEvent(x, y, 0, true, game, 0)
+        task.wait(0.02)
+        VirtualInputManager:SendMouseButtonEvent(x, y, 0, false, game, 0)
+        VirtualInputManager:SendMouseMoveEvent(500, 500, game)
+    end)
+end
+
+local function findGenerators()
+    local list = {}
+    for _, obj in ipairs(workspace:GetDescendants()) do
+        if obj:IsA("ProximityPrompt") and obj.Enabled then
+            local name = obj.Name:lower()
+            local parentName = obj.Parent and obj.Parent.Name:lower() or ""
+            if name:find("gen") or name:find("repair") or name:find("fix") or 
+               parentName:find("gen") or parentName:find("repair") then
+                table.insert(list, obj)
+            end
+        end
+    end
+    return list
+end
+
+local function tryPrompt()
+    local char = LocalPlayer.Character
+    local hrp = char and char:FindFirstChild("HumanoidRootPart")
+    if not hrp then return false end
+    local prompts = findGenerators()
+    local closest, closestDist = nil, math.huge
+    for _, prompt in ipairs(prompts) do
+        local parent = prompt.Parent
+        if parent and parent:IsA("BasePart") then
+            local dist = (hrp.Position - parent.Position).Magnitude
+            if dist < closestDist and dist <= state.autoGenMaxDist then
+                closestDist = dist
+                closest = prompt
+            end
+        end
+    end
+    if closest then
+        pcall(function()
+            closest:InputHoldBegin()
+            task.wait(0.1)
+            closest:InputHoldEnd()
+            if closest.Triggered then
+                closest.Triggered:Fire()
+            end
+        end)
+        print("[AUTO GEN] Prompt triggered:", closest.Name, "| Dist:", math.floor(closestDist))
+        return true
+    end
+    return false
+end
+
+local function tryScreenClick()
+    local now = tick()
+    if now - state.autoGenLastClick < state.autoGenClickCooldown then return false end
+    state.autoGenLastClick = now
+    local camera = workspace.CurrentCamera
+    if not camera then return false end
+    local vp = camera.ViewportSize
+    clickAt(vp.X / 2, vp.Y / 2)
+    return true
+end
+
+task.spawn(function()
+    while state.running do
+        task.wait(0.2)
+        if not state.autoGenEnabled then continue end
+        local ok = false
+        pcall(function() ok = tryPrompt() end)
+        if not ok then pcall(tryScreenClick) end
+    end
+end)
+
+-- ═══════════════════════════════════════════════════════
 -- BRUTAL ANTI-LAG
 -- ═══════════════════════════════════════════════════════
 
 local function applyBrutalAntiLag()
     state.brutalLagEnabled = true
     print("[VD] Brutal Anti-Lag: APPLYING...")
-    
     pcall(function()
         Lighting.GlobalShadows = false
-        
         if SETTINGS.FullbrightEnabled then
             Lighting.Brightness = 3
             Lighting.ClockTime = 14
@@ -292,7 +375,6 @@ local function applyBrutalAntiLag()
             Lighting.Ambient = Color3.fromRGB(0, 0, 0)
             Lighting.OutdoorAmbient = Color3.fromRGB(0, 0, 0)
         end
-        
         if SETTINGS.NoFogEnabled then
             Lighting.FogEnd = 100000
             Lighting.FogStart = 0
@@ -300,15 +382,10 @@ local function applyBrutalAntiLag()
             Lighting.FogEnd = 100
             Lighting.FogStart = 0
         end
-        
         Lighting.EnvironmentDiffuseScale = 0
         Lighting.EnvironmentSpecularScale = 0
     end)
-    
-    pcall(function()
-        if Camera then Camera.FarPlane = 150 end
-    end)
-    
+    pcall(function() if Camera then Camera.FarPlane = 150 end end)
     pcall(function()
         workspace.Terrain.WaterWaveSize = 0
         workspace.Terrain.WaterWaveSpeed = 0
@@ -316,7 +393,6 @@ local function applyBrutalAntiLag()
         workspace.Terrain.WaterTransparency = 1
         workspace.Terrain.Decoration = false
     end)
-    
     local protectedParts = {}
     for _, plr in ipairs(Players:GetPlayers()) do
         if plr.Character then
@@ -326,7 +402,6 @@ local function applyBrutalAntiLag()
             end
         end
     end
-    
     task.spawn(function()
         local count = 0
         local batch = 0
@@ -337,7 +412,6 @@ local function applyBrutalAntiLag()
                 if protectedParts[parent] then isProtected = true break end
                 parent = parent.Parent
             end
-            
             if not isProtected then
                 pcall(function()
                     if obj:IsA("ParticleEmitter") or obj:IsA("Smoke") or obj:IsA("Fire") or obj:IsA("Sparkles") then
@@ -367,10 +441,8 @@ local function applyBrutalAntiLag()
                     end
                 end)
             end
-            
             count = count + 1
             batch = batch + 1
-            
             if batch >= 500 then
                 batch = 0
                 task.wait()
@@ -386,7 +458,6 @@ local function resetBrutalAntiLag()
         pcall(function() state.brutalLagConn:Disconnect() end)
         state.brutalLagConn = nil
     end
-    
     pcall(function()
         Lighting.GlobalShadows = true
         Lighting.Brightness = 2
@@ -395,16 +466,13 @@ local function resetBrutalAntiLag()
         Lighting.FogEnd = 100000
         Lighting.FogStart = 0
     end)
-    
     if Camera then Camera.FarPlane = 100000 end
-    
     pcall(function()
         workspace.Terrain.WaterWaveSize = 0.15
         workspace.Terrain.WaterWaveSpeed = 10
         workspace.Terrain.WaterReflectance = 0.1
         workspace.Terrain.WaterTransparency = 0.5
     end)
-    
     task.defer(function()
         if SETTINGS.FullbrightEnabled then
             pcall(function()
@@ -421,7 +489,6 @@ local function resetBrutalAntiLag()
             end)
         end
     end)
-    
     print("[VD] Brutal Anti-Lag: RESET")
 end
 
@@ -636,7 +703,7 @@ local HeaderTitle = Instance.new("TextLabel")
 HeaderTitle.Size = UDim2.new(0, 200, 1, 0)
 HeaderTitle.Position = UDim2.fromOffset(38, 0)
 HeaderTitle.BackgroundTransparency = 1
-HeaderTitle.Text = "VD TOOLS  |  v7"
+HeaderTitle.Text = "VD TOOLS  |  v9 FINAL"
 HeaderTitle.TextColor3 = C.text
 HeaderTitle.TextSize = 11
 HeaderTitle.Font = Enum.Font.GothamBold
@@ -738,13 +805,14 @@ ContentScroll.Size = UDim2.new(1, -10, 1, -10)
 ContentScroll.Position = UDim2.fromOffset(5, 5)
 ContentScroll.BackgroundTransparency = 1
 ContentScroll.BorderSizePixel = 0
-ContentScroll.CanvasSize = UDim2.new(0, 0, 0, 500)
+ContentScroll.CanvasSize = UDim2.new(0, 0, 0, 600)
 ContentScroll.ScrollBarThickness = 3
 ContentScroll.ScrollBarImageColor3 = C.accent
 ContentScroll.Parent = ContentArea
 
 local categories = {
     {name = "ESP", icon = "👁", id = "esp"},
+    {name = "Auto Gen", icon = "🔧", id = "autogen"},
     {name = "Lag Fix", icon = "⚡", id = "lag"},
     {name = "Player", icon = "🏃", id = "player"},
     {name = "Misc", icon = "⚙", id = "misc"},
@@ -756,7 +824,7 @@ local currentCat = "esp"
 local catContents = {}
 for _, cat in ipairs(categories) do
     local frame = Instance.new("Frame")
-    frame.Size = UDim2.new(1, 0, 0, 500)
+    frame.Size = UDim2.new(1, 0, 0, 600)
     frame.BackgroundTransparency = 1
     frame.Visible = (cat.id == currentCat)
     frame.Parent = ContentScroll
@@ -885,10 +953,7 @@ local function makeRow(parent, y, labelText, subText, callback)
     return {row = row, statusDot = statusDot}
 end
 
--- ═══════════════════════════════════════════════════════
--- TAB: ESP
--- ═══════════════════════════════════════════════════════
-
+-- TAB ESP
 local espFrame = catContents["esp"]
 local espY = 5
 
@@ -904,39 +969,34 @@ end)
 espToggle.statusDot.BackgroundColor3 = state.espEnabled and C.success or C.textDim
 espY = espY + 42
 
-local boxToggle = makeRow(espFrame, espY, "Kotak Highlight", "Warna kotak di pemain", function(row, dot)
+makeRow(espFrame, espY, "Kotak Highlight", "Warna kotak di pemain", function(row, dot)
     SETTINGS.ShowBox = not SETTINGS.ShowBox
     dot.BackgroundColor3 = SETTINGS.ShowBox and C.success or C.textDim
-end)
-boxToggle.statusDot.BackgroundColor3 = SETTINGS.ShowBox and C.success or C.textDim
+end).statusDot.BackgroundColor3 = SETTINGS.ShowBox and C.success or C.textDim
 espY = espY + 42
 
-local roleToggle = makeRow(espFrame, espY, "Role", "Tampilkan KILLER/SURVIVOR", function(row, dot)
+makeRow(espFrame, espY, "Role", "Tampilkan KILLER/SURVIVOR", function(row, dot)
     SETTINGS.ShowRole = not SETTINGS.ShowRole
     dot.BackgroundColor3 = SETTINGS.ShowRole and C.success or C.textDim
-end)
-roleToggle.statusDot.BackgroundColor3 = SETTINGS.ShowRole and C.success or C.textDim
+end).statusDot.BackgroundColor3 = SETTINGS.ShowRole and C.success or C.textDim
 espY = espY + 42
 
-local nameToggle = makeRow(espFrame, espY, "Nama", "Tampilkan nama pemain", function(row, dot)
+makeRow(espFrame, espY, "Nama", "Tampilkan nama pemain", function(row, dot)
     SETTINGS.ShowName = not SETTINGS.ShowName
     dot.BackgroundColor3 = SETTINGS.ShowName and C.success or C.textDim
-end)
-nameToggle.statusDot.BackgroundColor3 = SETTINGS.ShowName and C.success or C.textDim
+end).statusDot.BackgroundColor3 = SETTINGS.ShowName and C.success or C.textDim
 espY = espY + 42
 
-local distToggle = makeRow(espFrame, espY, "Jarak", "Tampilkan jarak (meter)", function(row, dot)
+makeRow(espFrame, espY, "Jarak", "Tampilkan jarak (meter)", function(row, dot)
     SETTINGS.ShowDistance = not SETTINGS.ShowDistance
     dot.BackgroundColor3 = SETTINGS.ShowDistance and C.success or C.textDim
-end)
-distToggle.statusDot.BackgroundColor3 = SETTINGS.ShowDistance and C.success or C.textDim
+end).statusDot.BackgroundColor3 = SETTINGS.ShowDistance and C.success or C.textDim
 espY = espY + 42
 
-local hpToggle = makeRow(espFrame, espY, "Darah", "Tampilkan HP pemain", function(row, dot)
+makeRow(espFrame, espY, "Darah", "Tampilkan HP pemain", function(row, dot)
     SETTINGS.ShowHealth = not SETTINGS.ShowHealth
     dot.BackgroundColor3 = SETTINGS.ShowHealth and C.success or C.textDim
-end)
-hpToggle.statusDot.BackgroundColor3 = SETTINGS.ShowHealth and C.success or C.textDim
+end).statusDot.BackgroundColor3 = SETTINGS.ShowHealth and C.success or C.textDim
 espY = espY + 48
 
 local filterLbl = Instance.new("TextLabel")
@@ -1036,10 +1096,139 @@ markBtn.MouseButton1Click:Connect(function()
     end
 end)
 
--- ═══════════════════════════════════════════════════════
--- TAB: LAG
--- ═══════════════════════════════════════════════════════
+-- TAB AUTO GEN
+local autoGenFrame = catContents["autogen"]
+local agY = 5
 
+local agInfo = Instance.new("Frame")
+agInfo.Size = UDim2.new(1, -10, 0, 70)
+agInfo.Position = UDim2.new(0, 5, 0, agY)
+agInfo.BackgroundColor3 = C.panelLight
+agInfo.BackgroundTransparency = 0.3
+agInfo.BorderSizePixel = 0
+agInfo.Parent = autoGenFrame
+
+local AGIC = Instance.new("UICorner")
+AGIC.CornerRadius = UDim.new(0, 6)
+AGIC.Parent = agInfo
+
+local agTitle = Instance.new("TextLabel")
+agTitle.Size = UDim2.new(1, -20, 0, 18)
+agTitle.Position = UDim2.fromOffset(10, 6)
+agTitle.BackgroundTransparency = 1
+agTitle.Text = "AUTO GENERATOR"
+agTitle.TextColor3 = C.warning
+agTitle.TextSize = 11
+agTitle.Font = Enum.Font.GothamBold
+agTitle.TextXAlignment = Enum.TextXAlignment.Left
+agTitle.Parent = agInfo
+
+local agSub = Instance.new("TextLabel")
+agSub.Size = UDim2.new(1, -20, 0, 42)
+agSub.Position = UDim2.fromOffset(10, 24)
+agSub.BackgroundTransparency = 1
+agSub.Text = "Deketin generator → auto-trigger.\nPake ProximityPrompt + auto click.\nMax distance bisa diatur."
+agSub.TextColor3 = C.textDim
+agSub.TextSize = 9
+agSub.Font = Enum.Font.Gotham
+agSub.TextXAlignment = Enum.TextXAlignment.Left
+agSub.TextYAlignment = Enum.TextYAlignment.Top
+agSub.TextWrapped = true
+agSub.Parent = agInfo
+agY = agY + 76
+
+local autoGenToggle = makeRow(autoGenFrame, agY, "Auto Generator", "OFF / ON", function(row, dot)
+    state.autoGenEnabled = not state.autoGenEnabled
+    dot.BackgroundColor3 = state.autoGenEnabled and C.success or C.textDim
+    print("[VD] Auto Gen:", state.autoGenEnabled and "ON" or "OFF")
+end)
+autoGenToggle.statusDot.BackgroundColor3 = C.textDim
+agY = agY + 46
+
+local distLbl = Instance.new("TextLabel")
+distLbl.Size = UDim2.new(1, -10, 0, 14)
+distLbl.Position = UDim2.new(0, 5, 0, agY)
+distLbl.BackgroundTransparency = 1
+distLbl.Text = "Max Distance: " .. state.autoGenMaxDist .. " studs"
+distLbl.TextColor3 = C.textDim
+distLbl.TextSize = 9
+distLbl.Font = Enum.Font.Gotham
+distLbl.TextXAlignment = Enum.TextXAlignment.Left
+distLbl.Parent = autoGenFrame
+agY = agY + 18
+
+local agSliderBg = Instance.new("Frame")
+agSliderBg.Size = UDim2.new(1, -10, 0, 6)
+agSliderBg.Position = UDim2.new(0, 5, 0, agY)
+agSliderBg.BackgroundColor3 = C.divider
+agSliderBg.BorderSizePixel = 0
+agSliderBg.Parent = autoGenFrame
+
+local AGSBC = Instance.new("UICorner")
+AGSBC.CornerRadius = UDim.new(1, 0)
+AGSBC.Parent = agSliderBg
+
+local agFill = Instance.new("Frame")
+agFill.Size = UDim2.new((state.autoGenMaxDist - 5) / 45, 0, 1, 0)
+agFill.BackgroundColor3 = C.accent
+agFill.BorderSizePixel = 0
+agFill.Parent = agSliderBg
+
+local AGFC = Instance.new("UICorner")
+AGFC.CornerRadius = UDim.new(1, 0)
+AGFC.Parent = agFill
+
+local agKnob = Instance.new("TextButton")
+agKnob.Size = UDim2.fromOffset(14, 14)
+agKnob.Position = UDim2.new((state.autoGenMaxDist - 5) / 45, -7, 0.5, -7)
+agKnob.BackgroundColor3 = C.text
+agKnob.BorderSizePixel = 0
+agKnob.Text = ""
+agKnob.Parent = agSliderBg
+
+local AGKC = Instance.new("UICorner")
+AGKC.CornerRadius = UDim.new(1, 0)
+AGKC.Parent = agKnob
+
+local agDrag = false
+local function updateAgDist(input)
+    local pos = agSliderBg.AbsolutePosition.X
+    local size = agSliderBg.AbsoluteSize.X
+    local percent = math.clamp((input.Position.X - pos) / size, 0, 1)
+    local value = math.floor(5 + percent * 45)
+    state.autoGenMaxDist = value
+    agFill.Size = UDim2.new(percent, 0, 1, 0)
+    agKnob.Position = UDim2.new(percent, -7, 0.5, -7)
+    distLbl.Text = "Max Distance: " .. value .. " studs"
+end
+
+agKnob.InputBegan:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.Touch or input.UserInputType == Enum.UserInputType.MouseButton1 then
+        agDrag = true
+        updateAgDist(input)
+    end
+end)
+
+agSliderBg.InputBegan:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.Touch or input.UserInputType == Enum.UserInputType.MouseButton1 then
+        agDrag = true
+        updateAgDist(input)
+    end
+end)
+
+state.connections[#state.connections+1] = UserInputService.InputChanged:Connect(function(input)
+    if agDrag and (input.UserInputType == Enum.UserInputType.Touch or input.UserInputType == Enum.UserInputType.MouseMovement) then
+        updateAgDist(input)
+    end
+end)
+
+state.connections[#state.connections+1] = UserInputService.InputEnded:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.Touch or input.UserInputType == Enum.UserInputType.MouseButton1 then
+        agDrag = false
+    end
+end)
+
+-- TAB LAG
 local lagFrame = catContents["lag"]
 
 local infoBox = Instance.new("Frame")
@@ -1069,7 +1258,7 @@ local infoSub = Instance.new("TextLabel")
 infoSub.Size = UDim2.new(1, -20, 0, 42)
 infoSub.Position = UDim2.fromOffset(10, 24)
 infoSub.BackgroundTransparency = 1
-infoSub.Text = "Hapus semua efek, shadow, texture,\nparticle, decal. Khusus HP kentang.\nAnti-lag hormati Fullbright & No Fog."
+infoSub.Text = "Hapus semua efek, shadow, texture,\nparticle, decal. Khusus HP kentang.\nHormati Fullbright & No Fog."
 infoSub.TextColor3 = C.textDim
 infoSub.TextSize = 9
 infoSub.Font = Enum.Font.Gotham
@@ -1105,27 +1294,19 @@ brutalSub.Font = Enum.Font.Gotham
 brutalSub.TextXAlignment = Enum.TextXAlignment.Left
 brutalSub.Parent = brutalBtn
 
-local toggleBrutal = function()
+brutalBtn.Activated:Connect(function()
     if not state.brutalLagEnabled then
         brutalBtn.Text = "⚡ BRUTAL ANTI-LAG: ON ⚡"
         brutalBtn.BackgroundColor3 = C.success
         brutalSub.Text = "SEMUA fix aktif — HP ringan"
-        task.spawn(function()
-            pcall(applyBrutalAntiLag)
-        end)
-        print("[VD] Brutal: ON clicked")
+        task.spawn(function() pcall(applyBrutalAntiLag) end)
     else
         brutalBtn.Text = "⚡ BRUTAL ANTI-LAG: OFF ⚡"
         brutalBtn.BackgroundColor3 = C.danger
         brutalSub.Text = "Klik 1x → semua lag fix nyala"
-        task.spawn(function()
-            pcall(resetBrutalAntiLag)
-        end)
-        print("[VD] Brutal: OFF clicked")
+        task.spawn(function() pcall(resetBrutalAntiLag) end)
     end
-end
-
-brutalBtn.Activated:Connect(toggleBrutal)
+end)
 
 local tipsBox = Instance.new("Frame")
 tipsBox.Size = UDim2.new(1, -10, 0, 100)
@@ -1152,10 +1333,7 @@ tipsLabel.TextYAlignment = Enum.TextYAlignment.Top
 tipsLabel.TextWrapped = true
 tipsLabel.Parent = tipsBox
 
--- ═══════════════════════════════════════════════════════
--- TAB: PLAYER
--- ═══════════════════════════════════════════════════════
-
+-- TAB PLAYER
 local playerFrame = catContents["player"]
 local playerY = 5
 
@@ -1181,6 +1359,7 @@ playerY = playerY + 20
 
 local presets = {
     {label = "1.10x", value = 1.10},
+    {label = "1.15x", value = 1.15},
     {label = "1.20x", value = 1.20},
     {label = "1.25x", value = 1.25},
     {label = "1.50x", value = 1.50},
@@ -1204,11 +1383,11 @@ end
 
 for i, data in ipairs(presets) do
     local btn = Instance.new("TextButton")
-    btn.Size = UDim2.new(0.185, 0, 0, 24)
-    btn.Position = UDim2.new(0.01 + (i-1) * 0.195, 0, 0, playerY)
+    btn.Size = UDim2.new(0.15, 0, 0, 22)
+    btn.Position = UDim2.new(0.01 + (i-1) * 0.16, 0, 0, playerY)
     btn.BorderSizePixel = 0
     btn.Text = data.label
-    btn.TextSize = 8
+    btn.TextSize = 7
     btn.Font = Enum.Font.GothamBold
     btn.Parent = playerFrame
     local c = Instance.new("UICorner")
@@ -1222,7 +1401,7 @@ for i, data in ipairs(presets) do
     end)
 end
 updatePresetHighlight()
-playerY = playerY + 32
+playerY = playerY + 30
 
 local jumpContainer = Instance.new("Frame")
 jumpContainer.Size = UDim2.new(1, -10, 0, 40)
@@ -1321,47 +1500,39 @@ end)
 
 playerY = playerY + 46
 
-local antiFlingRow = makeRow(playerFrame, playerY, "Anti-Fling", "Cegah diputar/lempar", function(row, dot)
+makeRow(playerFrame, playerY, "Anti-Fling", "Cegah diputar/lempar", function(row, dot)
     SETTINGS.AntiFlingEnabled = not SETTINGS.AntiFlingEnabled
     dot.BackgroundColor3 = SETTINGS.AntiFlingEnabled and C.success or C.textDim
-end)
-antiFlingRow.statusDot.BackgroundColor3 = SETTINGS.AntiFlingEnabled and C.success or C.textDim
+end).statusDot.BackgroundColor3 = SETTINGS.AntiFlingEnabled and C.success or C.textDim
 playerY = playerY + 42
 
-local infJumpRow = makeRow(playerFrame, playerY, "Infinite Jump", "Lompat di udara", function(row, dot)
+makeRow(playerFrame, playerY, "Infinite Jump", "Lompat di udara", function(row, dot)
     SETTINGS.InfJumpEnabled = not SETTINGS.InfJumpEnabled
     dot.BackgroundColor3 = SETTINGS.InfJumpEnabled and C.success or C.textDim
-end)
-infJumpRow.statusDot.BackgroundColor3 = SETTINGS.InfJumpEnabled and C.success or C.textDim
+end).statusDot.BackgroundColor3 = SETTINGS.InfJumpEnabled and C.success or C.textDim
 
--- ═══════════════════════════════════════════════════════
--- TAB: MISC
--- ═══════════════════════════════════════════════════════
-
+-- TAB MISC
 local miscFrame = catContents["misc"]
 local miscY = 5
 
-local fbRow = makeRow(miscFrame, miscY, "Fullbright", "Terangin seluruh map", function(row, dot)
+makeRow(miscFrame, miscY, "Fullbright", "Terangin seluruh map", function(row, dot)
     SETTINGS.FullbrightEnabled = not SETTINGS.FullbrightEnabled
     dot.BackgroundColor3 = SETTINGS.FullbrightEnabled and C.success or C.textDim
     applyFullbright()
-end)
-fbRow.statusDot.BackgroundColor3 = SETTINGS.FullbrightEnabled and C.success or C.textDim
+end).statusDot.BackgroundColor3 = SETTINGS.FullbrightEnabled and C.success or C.textDim
 miscY = miscY + 42
 
-local fogRow = makeRow(miscFrame, miscY, "No Fog", "Hilangkan kabut", function(row, dot)
+makeRow(miscFrame, miscY, "No Fog", "Hilangkan kabut", function(row, dot)
     SETTINGS.NoFogEnabled = not SETTINGS.NoFogEnabled
     dot.BackgroundColor3 = SETTINGS.NoFogEnabled and C.success or C.textDim
     applyNoFog()
-end)
-fogRow.statusDot.BackgroundColor3 = SETTINGS.NoFogEnabled and C.success or C.textDim
+end).statusDot.BackgroundColor3 = SETTINGS.NoFogEnabled and C.success or C.textDim
 miscY = miscY + 42
 
-local afkRow = makeRow(miscFrame, miscY, "Anti-AFK", "Biar gak di-kick", function(row, dot)
+makeRow(miscFrame, miscY, "Anti-AFK", "Biar gak di-kick", function(row, dot)
     state.antiAfkEnabled = not state.antiAfkEnabled
     dot.BackgroundColor3 = state.antiAfkEnabled and C.success or C.textDim
-end)
-afkRow.statusDot.BackgroundColor3 = state.antiAfkEnabled and C.success or C.textDim
+end).statusDot.BackgroundColor3 = state.antiAfkEnabled and C.success or C.textDim
 
 -- ═══════════════════════════════════════════════════════
 -- EVENTS
@@ -1481,4 +1652,6 @@ for _, player in ipairs(Players:GetPlayers()) do
     if player ~= LocalPlayer then createESP(player) end
 end
 
-print("[VD TOOLS v7] Loaded! 5 Preset Speed: 1.10x / 1.20x / 1.25x / 1.50x / 2.00x")
+print("[VD TOOLS v9 FINAL] Loaded!")
+print("[VD TOOLS v9] Tab: ESP | Auto Gen | Lag Fix | Player | Misc")
+print("[VD TOOLS v9] 6 Preset Speed: 1.10x / 1.15x / 1.20x / 1.25x / 1.50x / 2.00x")
