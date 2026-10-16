@@ -1,9 +1,8 @@
--- [[ VD TOOLS v2 — Multi-Feature Hub ]]
--- Fitur: ESP, Fix Lag, Speed Boot (Natural), Player Mods, Misc
--- Update: Speed Boot auto-monitor WalkSpeed game
+-- [[ VD TOOLS v3 — Multi-Feature Hub ]]
+-- Fix: Speed Boot Infinite Loop
 
 local env = (getgenv and getgenv()) or _G
-for _, name in ipairs({"VDTools_v1", "VDTools_v2", "SimpleESP_KillerSurvivor"}) do
+for _, name in ipairs({"VDTools_v1", "VDTools_v2", "VDTools_v3", "SimpleESP_KillerSurvivor"}) do
     local old = env[name]
     if type(old) == "table" then
         old.running = false
@@ -41,9 +40,8 @@ local state = {
     antiAfkEnabled = true,
     speedMonitorConn = nil,
 }
-env.VDTools_v2 = state
+env.VDTools_v3 = state
 
--- ⭐ COLOR PALETTE
 local COLORS = {
     bg = Color3.fromRGB(28, 32, 42),
     panel = Color3.fromRGB(38, 44, 58),
@@ -58,7 +56,6 @@ local COLORS = {
     border = Color3.fromRGB(70, 80, 105),
 }
 
--- ⭐ SETTINGS
 local SETTINGS = {
     MaxDistance = 1000,
     SurvivorColor = Color3.fromRGB(80, 180, 255),
@@ -71,23 +68,17 @@ local SETTINGS = {
     ShowDistance = true,
     ShowHealth = true,
     FilterRole = "both",
-    
-    -- Speed Boot
     SpeedEnabled = false,
     SpeedMultiplier = 1.25,
     JumpPower = 50,
-    
-    -- Player Mods
     InfJumpEnabled = false,
     AntiFlingEnabled = false,
-    
-    -- Misc
     FullbrightEnabled = false,
     NoFogEnabled = false,
 }
 
 -- ═══════════════════════════════════════════════════════
--- SECTION: ESP
+-- ESP
 -- ═══════════════════════════════════════════════════════
 
 local function getRole(player)
@@ -314,11 +305,12 @@ local function updateESP()
 end
 
 -- ═══════════════════════════════════════════════════════
--- SECTION: SPEED BOOT (NATURAL MULTIPLIER)
+-- SPEED BOOT (FIXED — ANTI LOOP)
 -- ═══════════════════════════════════════════════════════
 
 local gameBaseSpeed = 16
 local ourSetSpeed = nil
+local isUpdatingSpeed = false
 
 local function disconnectSpeedMonitor()
     if state.speedMonitorConn then
@@ -336,38 +328,45 @@ local function applySpeedBoot()
     disconnectSpeedMonitor()
     
     if not SETTINGS.SpeedEnabled then
+        isUpdatingSpeed = true
         hum.WalkSpeed = gameBaseSpeed
+        task.wait()
+        isUpdatingSpeed = false
         ourSetSpeed = nil
         return
     end
     
+    isUpdatingSpeed = true
     ourSetSpeed = gameBaseSpeed * SETTINGS.SpeedMultiplier
     hum.WalkSpeed = ourSetSpeed
+    task.wait()
+    isUpdatingSpeed = false
     
-    -- ⭐ MONITOR: Kalau game ubah WalkSpeed (slow/perk/freeze)
     state.speedMonitorConn = hum:GetPropertyChangedSignal("WalkSpeed"):Connect(function()
+        if isUpdatingSpeed then return end
         if not SETTINGS.SpeedEnabled then return end
         if not hum or not hum.Parent then return end
         
         local current = hum.WalkSpeed
         
-        -- Skip kalau perubahan dari kita sendiri
         if ourSetSpeed and math.abs(current - ourSetSpeed) < 0.01 then
             return
         end
         
-        -- Game yang ubah → update base
         gameBaseSpeed = current
-        ourSetSpeed = gameBaseSpeed * SETTINGS.SpeedMultiplier
         
-        -- Apply multiplier
-        task.defer(function()
-            if hum and hum.Parent and SETTINGS.SpeedEnabled then
-                pcall(function()
-                    hum.WalkSpeed = ourSetSpeed
-                end)
-            end
-        end)
+        local newSpeed = gameBaseSpeed * SETTINGS.SpeedMultiplier
+        
+        if math.abs(newSpeed - current) < 0.01 then
+            ourSetSpeed = current
+            return
+        end
+        
+        isUpdatingSpeed = true
+        ourSetSpeed = newSpeed
+        hum.WalkSpeed = newSpeed
+        task.wait()
+        isUpdatingSpeed = false
     end)
 end
 
@@ -377,7 +376,6 @@ local function initSpeedBoot()
     local hum = char:FindFirstChildOfClass("Humanoid")
     if not hum then return end
     
-    -- Kalau belum pernah init, baca base speed
     if not SETTINGS.SpeedEnabled then
         gameBaseSpeed = hum.WalkSpeed
     end
@@ -398,7 +396,7 @@ local function applyPlayerMods()
 end
 
 -- ═══════════════════════════════════════════════════════
--- SECTION: FIX LAG
+-- FIX LAG
 -- ═══════════════════════════════════════════════════════
 
 local lagFixes = {
@@ -458,7 +456,7 @@ local function resetLagFixes()
 end
 
 -- ═══════════════════════════════════════════════════════
--- SECTION: MISC
+-- MISC
 -- ═══════════════════════════════════════════════════════
 
 local function applyFullbright()
@@ -554,7 +552,7 @@ local HeaderTitle = Instance.new("TextLabel")
 HeaderTitle.Size = UDim2.new(1, -50, 1, 0)
 HeaderTitle.Position = UDim2.fromOffset(14, 0)
 HeaderTitle.BackgroundTransparency = 1
-HeaderTitle.Text = "VD TOOLS v2"
+HeaderTitle.Text = "VD TOOLS v3"
 HeaderTitle.TextColor3 = COLORS.text
 HeaderTitle.TextSize = 13
 HeaderTitle.Font = Enum.Font.GothamBold
@@ -663,7 +661,6 @@ for i, tabName in ipairs(tabs) do
     end)
 end
 
--- ⭐ HELPERS
 local function makeToggle(parent, y, labelText, key, table, callback)
     local container = Instance.new("Frame")
     container.Size = UDim2.new(0.94, 0, 0, 30)
@@ -986,12 +983,11 @@ resetBtn.MouseButton1Click:Connect(function()
 end)
 
 -- ═══════════════════════════════════════════════════════
--- TAB: PLAYER (SPEED BOOT NATURAL)
+-- TAB: PLAYER
 -- ═══════════════════════════════════════════════════════
 
 local playerFrame = tabContents["PLAYER"]
 
--- Info banner
 local speedInfo = Instance.new("TextLabel")
 speedInfo.Size = UDim2.new(0.94, 0, 0, 60)
 speedInfo.Position = UDim2.new(0.03, 0, 0, 8)
@@ -1010,10 +1006,8 @@ local SIC = Instance.new("UICorner")
 SIC.CornerRadius = UDim.new(0, 8)
 SIC.Parent = speedInfo
 
--- Toggle
 makeToggle(playerFrame, 76, "Speed Boot Aktif", "SpeedEnabled", SETTINGS, applyPlayerMods)
 
--- Multiplier label
 local multLabel = Instance.new("TextLabel")
 multLabel.Size = UDim2.new(0.94, 0, 0, 16)
 multLabel.Position = UDim2.new(0.03, 0, 0, 116)
@@ -1025,7 +1019,6 @@ multLabel.Font = Enum.Font.GothamBold
 multLabel.TextXAlignment = Enum.TextXAlignment.Left
 multLabel.Parent = playerFrame
 
--- Preset buttons
 local presets = {
     {label = "1.10x", value = 1.10},
     {label = "1.25x", value = 1.25},
@@ -1073,7 +1066,6 @@ for i, data in ipairs(presets) do
 end
 updatePresetHighlight()
 
--- JumpPower
 makeSlider(playerFrame, 174, "JumpPower", 50, 200, SETTINGS.JumpPower, function(v)
     SETTINGS.JumpPower = v
     local char = LocalPlayer.Character
@@ -1172,7 +1164,6 @@ end)
 
 state.connections[#state.connections+1] = LocalPlayer.CharacterAdded:Connect(function()
     task.wait(1)
-    -- ⭐ Reset speed monitor tiap respawn
     disconnectSpeedMonitor()
     task.wait(0.5)
     local char = LocalPlayer.Character
@@ -1227,11 +1218,9 @@ state.connections[#state.connections+1] = HideBtn.MouseButton1Click:Connect(func
     end
 end)
 
--- Init
 applyPlayerMods()
 for _, player in ipairs(Players:GetPlayers()) do
     if player ~= LocalPlayer then createESP(player) end
 end
 
-print("[VD TOOLS v2] Loaded!")
-print("[VD TOOLS v2] Tab: ESP | LAG | PLAYER (Speed Boot Natural) | MISC")
+print("[VD TOOLS v3] Loaded! Speed Boot FIXED")
