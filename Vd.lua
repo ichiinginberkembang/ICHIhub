@@ -1,7 +1,7 @@
--- [[ VD TOOLS v4 — Bolong Style UI + Speed Fix ]]
+-- [[ VD TOOLS v5 — Bolong Style UI + ONE-CLICK BRUTAL ANTI-LAG ]]
 
 local env = (getgenv and getgenv()) or _G
-for _, name in ipairs({"VDTools_v1", "VDTools_v2", "VDTools_v3", "VDTools_v4", "SimpleESP_KillerSurvivor"}) do
+for _, name in ipairs({"VDTools_v1", "VDTools_v2", "VDTools_v3", "VDTools_v4", "VDTools_v5", "SimpleESP_KillerSurvivor"}) do
     local old = env[name]
     if type(old) == "table" then
         old.running = false
@@ -38,23 +38,25 @@ local state = {
     manualSurvivor = {},
     antiAfkEnabled = true,
     speedMonitorConn = nil,
+    brutalLagEnabled = false,
+    hiddenObjects = {},
+    originalSettings = {},
 }
-env.VDTools_v4 = state
+env.VDTools_v5 = state
 
--- ⭐ COLORS — Bolong Style (Dark Clean)
 local C = {
-    bg = Color3.fromRGB(14, 14, 18),           -- Background utama (hitam soft)
-    panel = Color3.fromRGB(22, 22, 28),        -- Panel
-    panelLight = Color3.fromRGB(30, 30, 38),   -- Panel lebih terang
-    sidebar = Color3.fromRGB(18, 18, 24),      -- Sidebar
-    hover = Color3.fromRGB(38, 38, 48),        -- Hover
-    text = Color3.fromRGB(240, 240, 245),      -- Text utama
-    textDim = Color3.fromRGB(140, 140, 155),   -- Text secondary
-    accent = Color3.fromRGB(120, 130, 200),    -- Accent (biru soft)
-    success = Color3.fromRGB(90, 200, 130),    -- Hijau
-    danger = Color3.fromRGB(220, 90, 90),      -- Merah
-    warning = Color3.fromRGB(240, 180, 80),    -- Kuning
-    divider = Color3.fromRGB(40, 40, 50),      -- Garis
+    bg = Color3.fromRGB(14, 14, 18),
+    panel = Color3.fromRGB(22, 22, 28),
+    panelLight = Color3.fromRGB(30, 30, 38),
+    sidebar = Color3.fromRGB(18, 18, 24),
+    hover = Color3.fromRGB(38, 38, 48),
+    text = Color3.fromRGB(240, 240, 245),
+    textDim = Color3.fromRGB(140, 140, 155),
+    accent = Color3.fromRGB(120, 130, 200),
+    success = Color3.fromRGB(90, 200, 130),
+    danger = Color3.fromRGB(220, 90, 90),
+    warning = Color3.fromRGB(240, 180, 80),
+    divider = Color3.fromRGB(40, 40, 50),
 }
 
 local SETTINGS = {
@@ -143,7 +145,6 @@ local function createESP(player)
     if player == LocalPlayer then return end
     if state.esps[player] then return end
     local espData = {}
-    
     local highlight = Instance.new("Highlight")
     highlight.Name = "ESP_Highlight"
     highlight.FillTransparency = SETTINGS.FillTransparency
@@ -151,19 +152,16 @@ local function createESP(player)
     highlight.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
     highlight.Parent = game:GetService("CoreGui") or LocalPlayer:WaitForChild("PlayerGui")
     espData.Highlight = highlight
-    
     local billboard = Instance.new("BillboardGui")
     billboard.Name = "ESP_Billboard"
     billboard.Size = UDim2.new(0, 200, 0, 60)
     billboard.StudsOffset = Vector3.new(0, 3.2, 0)
     billboard.AlwaysOnTop = true
     billboard.Parent = highlight.Parent
-    
     local container = Instance.new("Frame")
     container.Size = UDim2.new(1, 0, 1, 0)
     container.BackgroundTransparency = 1
     container.Parent = billboard
-    
     local roleLabel = Instance.new("TextLabel")
     roleLabel.Size = UDim2.new(1, 0, 0, 18)
     roleLabel.BackgroundTransparency = 1
@@ -172,7 +170,6 @@ local function createESP(player)
     roleLabel.TextSize = 13
     roleLabel.Font = Enum.Font.GothamBold
     roleLabel.Parent = container
-    
     local nameLabel = Instance.new("TextLabel")
     nameLabel.Size = UDim2.new(1, 0, 0, 16)
     nameLabel.Position = UDim2.new(0, 0, 0, 18)
@@ -183,7 +180,6 @@ local function createESP(player)
     nameLabel.TextSize = 12
     nameLabel.Font = Enum.Font.GothamBold
     nameLabel.Parent = container
-    
     local distanceLabel = Instance.new("TextLabel")
     distanceLabel.Size = UDim2.new(1, 0, 0, 14)
     distanceLabel.Position = UDim2.new(0, 0, 0, 34)
@@ -194,7 +190,6 @@ local function createESP(player)
     distanceLabel.TextSize = 11
     distanceLabel.Font = Enum.Font.Gotham
     distanceLabel.Parent = container
-    
     local healthLabel = Instance.new("TextLabel")
     healthLabel.Size = UDim2.new(1, 0, 0, 14)
     healthLabel.Position = UDim2.new(0, 0, 0, 48)
@@ -205,7 +200,6 @@ local function createESP(player)
     healthLabel.TextSize = 11
     healthLabel.Font = Enum.Font.Gotham
     healthLabel.Parent = container
-    
     espData.Billboard = billboard
     espData.RoleLabel = roleLabel
     espData.NameLabel = nameLabel
@@ -224,7 +218,6 @@ local function updateESP()
     local myChar = LocalPlayer.Character
     local myHRP = myChar and myChar:FindFirstChild("HumanoidRootPart")
     local myPos = myHRP and myHRP.Position
-    
     for _, player in ipairs(Players:GetPlayers()) do
         if player == LocalPlayer then continue end
         local data = state.esps[player]
@@ -236,7 +229,6 @@ local function updateESP()
         local char = player.Character
         local hrp = char and char:FindFirstChild("HumanoidRootPart")
         local humanoid = char and char:FindFirstChildOfClass("Humanoid")
-        
         if hrp and humanoid and humanoid.Health > 0 then
             local role = getRole(player)
             if not shouldShow(role) then
@@ -281,7 +273,189 @@ local function updateESP()
 end
 
 -- ═══════════════════════════════════════════════════════
--- SPEED BOOT (FIXED STUTTER)
+-- BRUTAL ANTI-LAG (ONE CLICK)
+-- ═══════════════════════════════════════════════════════
+
+local function applyBrutalAntiLag()
+    state.brutalLagEnabled = true
+    print("[VD] Brutal Anti-Lag: ON")
+    
+    -- 1. Lighting minimal
+    Lighting.GlobalShadows = false
+    Lighting.Brightness = 0
+    Lighting.Ambient = Color3.fromRGB(0, 0, 0)
+    Lighting.OutdoorAmbient = Color3.fromRGB(0, 0, 0)
+    Lighting.FogEnd = 100
+    Lighting.FogStart = 0
+    Lighting.EnvironmentDiffuseScale = 0
+    Lighting.EnvironmentSpecularScale = 0
+    
+    -- 2. Camera render distance pendek
+    if Camera then
+        Camera.FarPlane = 150
+        pcall(function()
+            Camera.FieldOfView = 70
+        end)
+    end
+    
+    -- 3. Destroy semua objek berat di workspace (KECUALI karakter player)
+    local players = Players:GetPlayers()
+    local protectedParts = {}
+    for _, plr in ipairs(players) do
+        if plr.Character then
+            for _, part in ipairs(plr.Character:GetDescendants()) do
+                protectedParts[part] = true
+            end
+        end
+    end
+    
+    for _, obj in ipairs(workspace:GetDescendants()) do
+        pcall(function()
+            -- Skip kalau bagian dari karakter player
+            if protectedParts[obj] then return end
+            local parent = obj
+            local isProtected = false
+            while parent and parent ~= workspace do
+                if protectedParts[parent] then isProtected = true break end
+                parent = parent.Parent
+            end
+            if isProtected then return end
+            
+            -- Particles
+            if obj:IsA("ParticleEmitter") or obj:IsA("Smoke") or obj:IsA("Fire") or obj:IsA("Sparkles") then
+                obj.Enabled = false
+                return
+            end
+            
+            -- Trail/Beam
+            if obj:IsA("Trail") or obj:IsA("Beam") then
+                obj.Enabled = false
+                return
+            end
+            
+            -- Decals & Textures
+            if obj:IsA("Decal") or obj:IsA("Texture") then
+                obj.Transparency = 1
+                return
+            end
+            
+            -- SurfaceAppearance
+            if obj:IsA("SurfaceAppearance") then
+                obj.AlphaMode = Enum.AlphaMode.Overlay
+                pcall(function() obj.ColorMap = "" end)
+                pcall(function() obj.NormalMap = "" end)
+                pcall(function() obj.RoughnessMap = "" end)
+                pcall(function() obj.MetalnessMap = "" end)
+                return
+            end
+            
+            -- Sky
+            if obj:IsA("Sky") then
+                obj.Parent = nil
+                return
+            end
+            
+            -- Atmos
+            if obj:IsA("Atmosphere") then
+                obj.Density = 0
+                obj.Haze = 0
+                obj.Glare = 0
+                return
+            end
+            
+            -- Clouds
+            if obj:IsA("Clouds") then
+                obj.Cover = 0
+                obj.Density = 0
+                return
+            end
+            
+            -- Bloom
+            if obj:IsA("BloomEffect") or obj:IsA("BlurEffect") or obj:IsA("SunRaysEffect") or obj:IsA("ColorCorrectionEffect") or obj:IsA("DepthOfFieldEffect") then
+                obj.Enabled = false
+                return
+            end
+            
+            -- BasePart optimization
+            if obj:IsA("BasePart") then
+                obj.CastShadow = false
+                obj.Material = Enum.Material.SmoothPlastic
+                if obj:IsA("MeshPart") then
+                    pcall(function() obj.TextureID = "" end)
+                end
+                return
+            end
+        end)
+    end
+    
+    -- 4. Terrain minimal
+    pcall(function()
+        workspace.Terrain.WaterWaveSize = 0
+        workspace.Terrain.WaterWaveSpeed = 0
+        workspace.Terrain.WaterReflectance = 0
+        workspace.Terrain.WaterTransparency = 1
+        workspace.Terrain.Decoration = false
+    end)
+    
+    -- 5. Player effects (semua player termasuk diri sendiri)
+    for _, plr in ipairs(players) do
+        if plr.Character then
+            for _, obj in ipairs(plr.Character:GetDescendants()) do
+                pcall(function()
+                    if obj:IsA("ParticleEmitter") or obj:IsA("Trail") or obj:IsA("Beam") then
+                        obj.Enabled = false
+                    end
+                    if obj:IsA("BasePart") then
+                        obj.CastShadow = false
+                    end
+                end)
+            end
+        end
+    end
+    
+    -- 6. Loop monitor (terus-menerus buat objek baru)
+    if state.brutalLagConn then
+        pcall(function() state.brutalLagConn:Disconnect() end)
+    end
+    
+    state.brutalLagConn = RunService.Heartbeat:Connect(function()
+        if not state.brutalLagEnabled then return end
+        -- Auto-scan objek baru tiap 5 detik aja biar gak lag
+    end)
+    
+    print("[VD] Brutal Anti-Lag: Applied")
+end
+
+local function resetBrutalAntiLag()
+    state.brutalLagEnabled = false
+    if state.brutalLagConn then
+        pcall(function() state.brutalLagConn:Disconnect() end)
+        state.brutalLagConn = nil
+    end
+    
+    Lighting.GlobalShadows = true
+    Lighting.Brightness = 2
+    Lighting.Ambient = Color3.fromRGB(70, 70, 70)
+    Lighting.OutdoorAmbient = Color3.fromRGB(128, 128, 128)
+    Lighting.FogEnd = 100000
+    Lighting.FogStart = 0
+    
+    if Camera then
+        Camera.FarPlane = 100000
+    end
+    
+    pcall(function()
+        workspace.Terrain.WaterWaveSize = 0.15
+        workspace.Terrain.WaterWaveSpeed = 10
+        workspace.Terrain.WaterReflectance = 0.1
+        workspace.Terrain.WaterTransparency = 0.5
+    end)
+    
+    print("[VD] Brutal Anti-Lag: RESET")
+end
+
+-- ═══════════════════════════════════════════════════════
+-- SPEED BOOT
 -- ═══════════════════════════════════════════════════════
 
 local gameBaseSpeed = 16
@@ -300,9 +474,7 @@ local function applySpeedBoot()
     if not char then return end
     local hum = char:FindFirstChildOfClass("Humanoid")
     if not hum then return end
-    
     disconnectSpeedMonitor()
-    
     if not SETTINGS.SpeedEnabled then
         isUpdatingSpeed = true
         hum.WalkSpeed = gameBaseSpeed
@@ -311,37 +483,24 @@ local function applySpeedBoot()
         ourSetSpeed = nil
         return
     end
-    
     isUpdatingSpeed = true
     ourSetSpeed = gameBaseSpeed * SETTINGS.SpeedMultiplier
     hum.WalkSpeed = ourSetSpeed
     task.wait()
     isUpdatingSpeed = false
-    
-    -- ⭐ MONITOR dengan threshold biar gak stutter
     state.speedMonitorConn = hum:GetPropertyChangedSignal("WalkSpeed"):Connect(function()
         if isUpdatingSpeed then return end
         if not SETTINGS.SpeedEnabled then return end
         if not hum or not hum.Parent then return end
-        
         local current = hum.WalkSpeed
         local expected = ourSetSpeed or gameBaseSpeed
-        
-        -- ⭐ THRESHOLD: Skip kalau beda cuma dikit (< 3 studs/s)
-        -- Ini biar animasi lari / minor game update gak ganggu
-        if math.abs(current - expected) < 3 then
-            return
-        end
-        
-        -- Cuma update kalau BEDA SIGNIFIKAN (slow perk, freeze, dll)
+        if math.abs(current - expected) < 3 then return end
         gameBaseSpeed = current
         local newSpeed = gameBaseSpeed * SETTINGS.SpeedMultiplier
-        
         if math.abs(newSpeed - current) < 0.5 then
             ourSetSpeed = current
             return
         end
-        
         isUpdatingSpeed = true
         ourSetSpeed = newSpeed
         hum.WalkSpeed = newSpeed
@@ -370,58 +529,6 @@ local function applyPlayerMods()
 end
 
 -- ═══════════════════════════════════════════════════════
--- FIX LAG
--- ═══════════════════════════════════════════════════════
-
-local lagFixes = {
-    RemoveParticles = false,
-    RemoveDecals = false,
-    RemoveTextures = false,
-    DisableShadows = false,
-    LimitRenderDistance = false,
-    ReduceTerrain = false,
-}
-
-local function applyLagFixes()
-    if lagFixes.RemoveParticles then
-        for _, obj in ipairs(workspace:GetDescendants()) do
-            if obj:IsA("ParticleEmitter") or obj:IsA("Smoke") or obj:IsA("Fire") or obj:IsA("Sparkles") or obj:IsA("Trail") then
-                pcall(function() obj.Enabled = false end)
-            end
-        end
-    end
-    for _, obj in ipairs(workspace:GetDescendants()) do
-        if lagFixes.RemoveDecals and obj:IsA("Decal") then
-            pcall(function() obj.Transparency = 1 end)
-        end
-        if lagFixes.RemoveTextures and obj:IsA("Texture") then
-            pcall(function() obj.Transparency = 1 end)
-        end
-    end
-    if lagFixes.DisableShadows then Lighting.GlobalShadows = false end
-    if lagFixes.LimitRenderDistance and Camera then Camera.FarPlane = 200 end
-    if lagFixes.ReduceTerrain then
-        pcall(function()
-            workspace.Terrain.WaterWaveSize = 0
-            workspace.Terrain.WaterWaveSpeed = 0
-            workspace.Terrain.WaterReflectance = 0
-            workspace.Terrain.WaterTransparency = 1
-        end)
-    end
-end
-
-local function resetLagFixes()
-    Lighting.GlobalShadows = true
-    if Camera then Camera.FarPlane = 100000 end
-    pcall(function()
-        workspace.Terrain.WaterWaveSize = 0.15
-        workspace.Terrain.WaterWaveSpeed = 10
-        workspace.Terrain.WaterReflectance = 0.1
-        workspace.Terrain.WaterTransparency = 0.5
-    end)
-end
-
--- ═══════════════════════════════════════════════════════
 -- MISC
 -- ═══════════════════════════════════════════════════════
 
@@ -431,12 +538,10 @@ local function applyFullbright()
         Lighting.ClockTime = 14
         Lighting.Ambient = Color3.fromRGB(180, 180, 180)
         Lighting.OutdoorAmbient = Color3.fromRGB(180, 180, 180)
-        Lighting.GlobalShadows = false
     else
         Lighting.Brightness = 1
         Lighting.Ambient = Color3.fromRGB(70, 70, 70)
         Lighting.OutdoorAmbient = Color3.fromRGB(128, 128, 128)
-        Lighting.GlobalShadows = true
     end
 end
 
@@ -477,7 +582,6 @@ MainGui.DisplayOrder = 1000
 MainGui.Parent = playerGui
 state.guis[#state.guis+1] = MainGui
 
--- Main Window
 local MainFrame = Instance.new("Frame")
 MainFrame.Size = UDim2.fromOffset(420, 260)
 MainFrame.Position = UDim2.fromOffset(40, 80)
@@ -497,7 +601,6 @@ MFB.Thickness = 1
 MFB.Transparency = 0.3
 MFB.Parent = MainFrame
 
--- Header (top bar)
 local Header = Instance.new("Frame")
 Header.Size = UDim2.new(1, 0, 0, 30)
 Header.BackgroundColor3 = C.panel
@@ -515,7 +618,6 @@ HeaderFix.BackgroundColor3 = C.panel
 HeaderFix.BorderSizePixel = 0
 HeaderFix.Parent = Header
 
--- Logo icon
 local LogoIcon = Instance.new("Frame")
 LogoIcon.Size = UDim2.fromOffset(20, 20)
 LogoIcon.Position = UDim2.fromOffset(10, 5)
@@ -540,14 +642,13 @@ local HeaderTitle = Instance.new("TextLabel")
 HeaderTitle.Size = UDim2.new(0, 200, 1, 0)
 HeaderTitle.Position = UDim2.fromOffset(38, 0)
 HeaderTitle.BackgroundTransparency = 1
-HeaderTitle.Text = "VD TOOLS  |  v4"
+HeaderTitle.Text = "VD TOOLS  |  v5"
 HeaderTitle.TextColor3 = C.text
 HeaderTitle.TextSize = 11
 HeaderTitle.Font = Enum.Font.GothamBold
 HeaderTitle.TextXAlignment = Enum.TextXAlignment.Left
 HeaderTitle.Parent = Header
 
--- Window buttons
 local MinimizeBtn = Instance.new("TextButton")
 MinimizeBtn.Size = UDim2.fromOffset(20, 20)
 MinimizeBtn.Position = UDim2.new(1, -60, 0.5, -10)
@@ -580,14 +681,12 @@ local CBC = Instance.new("UICorner")
 CBC.CornerRadius = UDim.new(1, 0)
 CBC.Parent = CloseBtn
 
--- Body
 local Body = Instance.new("Frame")
 Body.Size = UDim2.new(1, 0, 1, -30)
 Body.Position = UDim2.new(0, 0, 0, 30)
 Body.BackgroundTransparency = 1
 Body.Parent = MainFrame
 
--- Search bar
 local SearchFrame = Instance.new("Frame")
 SearchFrame.Size = UDim2.new(0, 160, 0, 26)
 SearchFrame.Position = UDim2.fromOffset(12, 12)
@@ -623,14 +722,12 @@ SearchBox.TextXAlignment = Enum.TextXAlignment.Left
 SearchBox.ClearTextOnFocus = false
 SearchBox.Parent = SearchFrame
 
--- Sidebar
 local Sidebar = Instance.new("Frame")
 Sidebar.Size = UDim2.new(0, 110, 1, -50)
 Sidebar.Position = UDim2.fromOffset(12, 50)
 Sidebar.BackgroundTransparency = 1
 Sidebar.Parent = Body
 
--- Content Area
 local ContentArea = Instance.new("Frame")
 ContentArea.Size = UDim2.new(1, -140, 1, -50)
 ContentArea.Position = UDim2.fromOffset(128, 50)
@@ -652,7 +749,6 @@ ContentScroll.ScrollBarThickness = 3
 ContentScroll.ScrollBarImageColor3 = C.accent
 ContentScroll.Parent = ContentArea
 
--- Sidebar categories
 local categories = {
     {name = "ESP", icon = "👁", id = "esp"},
     {name = "Lag Fix", icon = "⚡", id = "lag"},
@@ -663,7 +759,6 @@ local categories = {
 local sidebarBtns = {}
 local currentCat = "esp"
 
--- Content containers
 local catContents = {}
 for _, cat in ipairs(categories) do
     local frame = Instance.new("Frame")
@@ -674,7 +769,6 @@ for _, cat in ipairs(categories) do
     catContents[cat.id] = frame
 end
 
--- Sidebar buttons
 for i, cat in ipairs(categories) do
     local btn = Instance.new("TextButton")
     btn.Size = UDim2.new(1, 0, 0, 30)
@@ -733,7 +827,6 @@ for i, cat in ipairs(categories) do
     end)
 end
 
--- ⭐ ROW HELPER (list item ala Bolong)
 local function makeRow(parent, y, labelText, subText, callback)
     local row = Instance.new("TextButton")
     row.Size = UDim2.new(1, -10, 0, 38)
@@ -780,7 +873,6 @@ local function makeRow(parent, y, labelText, subText, callback)
     arrow.Font = Enum.Font.GothamBold
     arrow.Parent = row
     
-    -- Status indicator (ON/OFF dot)
     local statusDot = Instance.new("Frame")
     statusDot.Size = UDim2.fromOffset(8, 8)
     statusDot.Position = UDim2.new(1, -34, 0.5, -4)
@@ -853,7 +945,6 @@ end)
 hpToggle.statusDot.BackgroundColor3 = SETTINGS.ShowHealth and C.success or C.textDim
 espY = espY + 48
 
--- Filter label
 local filterLbl = Instance.new("TextLabel")
 filterLbl.Size = UDim2.new(1, -10, 0, 16)
 filterLbl.Position = UDim2.new(0, 5, 0, espY)
@@ -890,11 +981,9 @@ local function makeFilterBtn(text, xPos, role)
     btn.TextSize = 8
     btn.Font = Enum.Font.GothamBold
     btn.Parent = espFrame
-    
     local c = Instance.new("UICorner")
     c.CornerRadius = UDim.new(0, 5)
     c.Parent = btn
-    
     filterBtns[role] = btn
     btn.MouseButton1Click:Connect(function()
         SETTINGS.FilterRole = role
@@ -919,7 +1008,6 @@ markBtn.TextColor3 = C.text
 markBtn.TextSize = 9
 markBtn.Font = Enum.Font.GothamBold
 markBtn.Parent = espFrame
-
 local MBC = Instance.new("UICorner")
 MBC.CornerRadius = UDim.new(0, 6)
 MBC.Parent = markBtn
@@ -955,53 +1043,112 @@ markBtn.MouseButton1Click:Connect(function()
 end)
 
 -- ═══════════════════════════════════════════════════════
--- TAB: LAG
+-- TAB: LAG (ONE-CLICK BRUTAL)
 -- ═══════════════════════════════════════════════════════
 
 local lagFrame = catContents["lag"]
-local lagY = 5
 
-local lagRows = {
-    {key = "RemoveParticles", label = "Hapus Partikel", sub = "Matikan effect & trail"},
-    {key = "RemoveDecals", label = "Hapus Decals", sub = "Gambar tempel di objek"},
-    {key = "RemoveTextures", label = "Hapus Textures", sub = "Texture berat"},
-    {key = "DisableShadows", label = "Matikan Shadows", sub = "Bayangan global"},
-    {key = "LimitRenderDistance", label = "Batasi Render", sub = "Render jauh (200 studs)"},
-    {key = "ReduceTerrain", label = "Kurangi Air", sub = "Detail air terrain"},
-}
+local infoBox = Instance.new("Frame")
+infoBox.Size = UDim2.new(1, -10, 0, 70)
+infoBox.Position = UDim2.new(0, 5, 0, 5)
+infoBox.BackgroundColor3 = C.panelLight
+infoBox.BackgroundTransparency = 0.3
+infoBox.BorderSizePixel = 0
+infoBox.Parent = lagFrame
 
-for _, item in ipairs(lagRows) do
-    local r = makeRow(lagFrame, lagY, item.label, item.sub, function(row, dot)
-        lagFixes[item.key] = not lagFixes[item.key]
-        dot.BackgroundColor3 = lagFixes[item.key] and C.success or C.textDim
-        applyLagFixes()
-    end)
-    r.statusDot.BackgroundColor3 = lagFixes[item.key] and C.success or C.textDim
-    lagY = lagY + 42
-end
+local IBC = Instance.new("UICorner")
+IBC.CornerRadius = UDim.new(0, 6)
+IBC.Parent = infoBox
 
-lagY = lagY + 6
-local resetBtn = Instance.new("TextButton")
-resetBtn.Size = UDim2.new(1, -10, 0, 30)
-resetBtn.Position = UDim2.new(0, 5, 0, lagY)
-resetBtn.BackgroundColor3 = C.warning
-resetBtn.BackgroundTransparency = 0.3
-resetBtn.BorderSizePixel = 0
-resetBtn.Text = "RESET SEMUA LAG FIX"
-resetBtn.TextColor3 = C.text
-resetBtn.TextSize = 9
-resetBtn.Font = Enum.Font.GothamBold
-resetBtn.Parent = lagFrame
+local infoTitle = Instance.new("TextLabel")
+infoTitle.Size = UDim2.new(1, -20, 0, 18)
+infoTitle.Position = UDim2.fromOffset(10, 6)
+infoTitle.BackgroundTransparency = 1
+infoTitle.Text = "BRUTAL ANTI-LAG"
+infoTitle.TextColor3 = C.warning
+infoTitle.TextSize = 11
+infoTitle.Font = Enum.Font.GothamBold
+infoTitle.TextXAlignment = Enum.TextXAlignment.Left
+infoTitle.Parent = infoBox
 
-local RBC = Instance.new("UICorner")
-RBC.CornerRadius = UDim.new(0, 6)
-RBC.Parent = resetBtn
+local infoSub = Instance.new("TextLabel")
+infoSub.Size = UDim2.new(1, -20, 0, 42)
+infoSub.Position = UDim2.fromOffset(10, 24)
+infoSub.BackgroundTransparency = 1
+infoSub.Text = "Hapus semua efek, shadow, texture,\nparticle, decal. Terangin & percepat.\nKhusus HP kentang — hasil maksimal."
+infoSub.TextColor3 = C.textDim
+infoSub.TextSize = 9
+infoSub.Font = Enum.Font.Gotham
+infoSub.TextXAlignment = Enum.TextXAlignment.Left
+infoSub.TextYAlignment = Enum.TextYAlignment.Top
+infoSub.TextWrapped = true
+infoSub.Parent = infoBox
 
-resetBtn.MouseButton1Click:Connect(function()
-    for k, _ in pairs(lagFixes) do lagFixes[k] = false end
-    resetLagFixes()
-    print("[VD] Lag fixes reset")
+local brutalBtn = Instance.new("TextButton")
+brutalBtn.Size = UDim2.new(1, -10, 0, 60)
+brutalBtn.Position = UDim2.new(0, 5, 0, 85)
+brutalBtn.BackgroundColor3 = C.danger
+brutalBtn.BackgroundTransparency = 0.2
+brutalBtn.BorderSizePixel = 0
+brutalBtn.Text = "⚡ BRUTAL ANTI-LAG: OFF ⚡"
+brutalBtn.TextColor3 = C.text
+brutalBtn.TextSize = 12
+brutalBtn.Font = Enum.Font.GothamBold
+brutalBtn.Parent = lagFrame
+
+local BBC = Instance.new("UICorner")
+BBC.CornerRadius = UDim.new(0, 8)
+BBC.Parent = brutalBtn
+
+local brutalSub = Instance.new("TextLabel")
+brutalSub.Size = UDim2.new(1, -20, 0, 14)
+brutalSub.Position = UDim2.new(0, 10, 1, -18)
+brutalSub.BackgroundTransparency = 1
+brutalSub.Text = "Klik 1x → semua lag fix nyala"
+brutalSub.TextColor3 = C.textDim
+brutalSub.TextSize = 8
+brutalSub.Font = Enum.Font.Gotham
+brutalSub.TextXAlignment = Enum.TextXAlignment.Left
+brutalSub.Parent = brutalBtn
+
+brutalBtn.MouseButton1Click:Connect(function()
+    if not state.brutalLagEnabled then
+        applyBrutalAntiLag()
+        brutalBtn.Text = "⚡ BRUTAL ANTI-LAG: ON ⚡"
+        brutalBtn.BackgroundColor3 = C.success
+        brutalSub.Text = "SEMUA fix aktif — HP ringan"
+    else
+        resetBrutalAntiLag()
+        brutalBtn.Text = "⚡ BRUTAL ANTI-LAG: OFF ⚡"
+        brutalBtn.BackgroundColor3 = C.danger
+        brutalSub.Text = "Klik 1x → semua lag fix nyala"
+    end
 end)
+
+local tipsBox = Instance.new("Frame")
+tipsBox.Size = UDim2.new(1, -10, 0, 100)
+tipsBox.Position = UDim2.new(0, 5, 0, 155)
+tipsBox.BackgroundColor3 = C.panelLight
+tipsBox.BackgroundTransparency = 0.5
+tipsBox.BorderSizePixel = 0
+tipsBox.Parent = lagFrame
+
+local TBC = Instance.new("UICorner")
+TBC.CornerRadius = UDim.new(0, 6)
+TBC.Parent = tipsBox
+
+local tipsLabel = Instance.new("TextLabel")
+tipsLabel.Size = UDim2.new(1, -20, 1, -10)
+tipsLabel.Position = UDim2.fromOffset(10, 5)
+tipsLabel.BackgroundTransparency = 1
+tipsLabel.Text = "TIPS HP KENTANG:\n• Matiin shadow device\n• Kecilin brightness HP\n• Tutup app lain\n• Wifi stabil > data\n• Jangan sampe baterai <20%"
+tipsLabel.TextColor3 = C.textDim
+tipsLabel.TextSize = 8
+tipsLabel.Font = Enum.Font.Gotham
+tipsLabel.TextXAlignment = Enum.TextXAlignment.Left
+tipsLabel.TextYAlignment = Enum.TextYAlignment.Top
+tipsLabel.TextWrapped = true
+tipsLabel.Parent = tipsBox
 
 -- ═══════════════════════════════════════════════════════
 -- TAB: PLAYER
@@ -1061,13 +1208,10 @@ for i, data in ipairs(presets) do
     btn.TextSize = 8
     btn.Font = Enum.Font.GothamBold
     btn.Parent = playerFrame
-    
     local c = Instance.new("UICorner")
     c.CornerRadius = UDim.new(0, 5)
     c.Parent = btn
-    
     table.insert(presetBtns, {btn = btn, value = data.value})
-    
     btn.MouseButton1Click:Connect(function()
         SETTINGS.SpeedMultiplier = data.value
         updatePresetHighlight()
@@ -1077,7 +1221,6 @@ end
 updatePresetHighlight()
 playerY = playerY + 32
 
--- JumpPower slider sederhana
 local jumpContainer = Instance.new("Frame")
 jumpContainer.Size = UDim2.new(1, -10, 0, 40)
 jumpContainer.Position = UDim2.new(0, 5, 0, playerY)
@@ -1291,7 +1434,6 @@ state.connections[#state.connections+1] = LocalPlayer.CharacterAdded:Connect(fun
     end
 end)
 
--- Minimize
 local minimized = false
 state.connections[#state.connections+1] = MinimizeBtn.MouseButton1Click:Connect(function()
     minimized = not minimized
@@ -1300,7 +1442,6 @@ state.connections[#state.connections+1] = MinimizeBtn.MouseButton1Click:Connect(
     MinimizeBtn.Text = minimized and "+" or "−"
 end)
 
--- Close
 state.connections[#state.connections+1] = CloseBtn.MouseButton1Click:Connect(function()
     MainFrame.Visible = false
     if not MainGui:FindFirstChild("ShowBtn") then
@@ -1317,17 +1458,14 @@ state.connections[#state.connections+1] = CloseBtn.MouseButton1Click:Connect(fun
         showBtn.Active = true
         showBtn.Draggable = true
         showBtn.Parent = MainGui
-        
         local sc = Instance.new("UICorner")
         sc.CornerRadius = UDim.new(0, 10)
         sc.Parent = showBtn
-        
         local s = Instance.new("UIStroke")
         s.Color = C.accent
         s.Thickness = 1
         s.Transparency = 0.3
         s.Parent = showBtn
-        
         showBtn.MouseButton1Click:Connect(function()
             MainFrame.Visible = true
             showBtn:Destroy()
@@ -1340,4 +1478,4 @@ for _, player in ipairs(Players:GetPlayers()) do
     if player ~= LocalPlayer then createESP(player) end
 end
 
-print("[VD TOOLS v4] Loaded! Bolong Style UI + Speed Fix (Threshold)")
+print("[VD TOOLS v5] Loaded! Brutal Anti-Lag: 1 Click")
