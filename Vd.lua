@@ -1,7 +1,7 @@
--- [[ VD TOOLS v5 — Bolong Style UI + ONE-CLICK BRUTAL ANTI-LAG ]]
+-- [[ VD TOOLS v6 — Bolong Style + Brutal Anti-Lag (FIXED) ]]
 
 local env = (getgenv and getgenv()) or _G
-for _, name in ipairs({"VDTools_v1", "VDTools_v2", "VDTools_v3", "VDTools_v4", "VDTools_v5", "SimpleESP_KillerSurvivor"}) do
+for _, name in ipairs({"VDTools_v1", "VDTools_v2", "VDTools_v3", "VDTools_v4", "VDTools_v5", "VDTools_v6", "SimpleESP_KillerSurvivor"}) do
     local old = env[name]
     if type(old) == "table" then
         old.running = false
@@ -39,10 +39,9 @@ local state = {
     antiAfkEnabled = true,
     speedMonitorConn = nil,
     brutalLagEnabled = false,
-    hiddenObjects = {},
-    originalSettings = {},
+    brutalLagConn = nil,
 }
-env.VDTools_v5 = state
+env.VDTools_v6 = state
 
 local C = {
     bg = Color3.fromRGB(14, 14, 18),
@@ -273,122 +272,44 @@ local function updateESP()
 end
 
 -- ═══════════════════════════════════════════════════════
--- BRUTAL ANTI-LAG (ONE CLICK)
+-- BRUTAL ANTI-LAG (FIXED — HORMATI FULLBRIGHT & NO FOG)
 -- ═══════════════════════════════════════════════════════
 
 local function applyBrutalAntiLag()
     state.brutalLagEnabled = true
-    print("[VD] Brutal Anti-Lag: ON")
+    print("[VD] Brutal Anti-Lag: APPLYING...")
     
-    -- 1. Lighting minimal
-    Lighting.GlobalShadows = false
-    Lighting.Brightness = 0
-    Lighting.Ambient = Color3.fromRGB(0, 0, 0)
-    Lighting.OutdoorAmbient = Color3.fromRGB(0, 0, 0)
-    Lighting.FogEnd = 100
-    Lighting.FogStart = 0
-    Lighting.EnvironmentDiffuseScale = 0
-    Lighting.EnvironmentSpecularScale = 0
-    
-    -- 2. Camera render distance pendek
-    if Camera then
-        Camera.FarPlane = 150
-        pcall(function()
-            Camera.FieldOfView = 70
-        end)
-    end
-    
-    -- 3. Destroy semua objek berat di workspace (KECUALI karakter player)
-    local players = Players:GetPlayers()
-    local protectedParts = {}
-    for _, plr in ipairs(players) do
-        if plr.Character then
-            for _, part in ipairs(plr.Character:GetDescendants()) do
-                protectedParts[part] = true
-            end
+    -- Step 1: Lighting (hormati Fullbright & No Fog)
+    pcall(function()
+        Lighting.GlobalShadows = false
+        
+        if SETTINGS.FullbrightEnabled then
+            Lighting.Brightness = 3
+            Lighting.ClockTime = 14
+            Lighting.Ambient = Color3.fromRGB(180, 180, 180)
+            Lighting.OutdoorAmbient = Color3.fromRGB(180, 180, 180)
+        else
+            Lighting.Brightness = 0
+            Lighting.Ambient = Color3.fromRGB(0, 0, 0)
+            Lighting.OutdoorAmbient = Color3.fromRGB(0, 0, 0)
         end
-    end
+        
+        if SETTINGS.NoFogEnabled then
+            Lighting.FogEnd = 100000
+            Lighting.FogStart = 0
+        else
+            Lighting.FogEnd = 100
+            Lighting.FogStart = 0
+        end
+        
+        Lighting.EnvironmentDiffuseScale = 0
+        Lighting.EnvironmentSpecularScale = 0
+    end)
     
-    for _, obj in ipairs(workspace:GetDescendants()) do
-        pcall(function()
-            -- Skip kalau bagian dari karakter player
-            if protectedParts[obj] then return end
-            local parent = obj
-            local isProtected = false
-            while parent and parent ~= workspace do
-                if protectedParts[parent] then isProtected = true break end
-                parent = parent.Parent
-            end
-            if isProtected then return end
-            
-            -- Particles
-            if obj:IsA("ParticleEmitter") or obj:IsA("Smoke") or obj:IsA("Fire") or obj:IsA("Sparkles") then
-                obj.Enabled = false
-                return
-            end
-            
-            -- Trail/Beam
-            if obj:IsA("Trail") or obj:IsA("Beam") then
-                obj.Enabled = false
-                return
-            end
-            
-            -- Decals & Textures
-            if obj:IsA("Decal") or obj:IsA("Texture") then
-                obj.Transparency = 1
-                return
-            end
-            
-            -- SurfaceAppearance
-            if obj:IsA("SurfaceAppearance") then
-                obj.AlphaMode = Enum.AlphaMode.Overlay
-                pcall(function() obj.ColorMap = "" end)
-                pcall(function() obj.NormalMap = "" end)
-                pcall(function() obj.RoughnessMap = "" end)
-                pcall(function() obj.MetalnessMap = "" end)
-                return
-            end
-            
-            -- Sky
-            if obj:IsA("Sky") then
-                obj.Parent = nil
-                return
-            end
-            
-            -- Atmos
-            if obj:IsA("Atmosphere") then
-                obj.Density = 0
-                obj.Haze = 0
-                obj.Glare = 0
-                return
-            end
-            
-            -- Clouds
-            if obj:IsA("Clouds") then
-                obj.Cover = 0
-                obj.Density = 0
-                return
-            end
-            
-            -- Bloom
-            if obj:IsA("BloomEffect") or obj:IsA("BlurEffect") or obj:IsA("SunRaysEffect") or obj:IsA("ColorCorrectionEffect") or obj:IsA("DepthOfFieldEffect") then
-                obj.Enabled = false
-                return
-            end
-            
-            -- BasePart optimization
-            if obj:IsA("BasePart") then
-                obj.CastShadow = false
-                obj.Material = Enum.Material.SmoothPlastic
-                if obj:IsA("MeshPart") then
-                    pcall(function() obj.TextureID = "" end)
-                end
-                return
-            end
-        end)
-    end
+    pcall(function()
+        if Camera then Camera.FarPlane = 150 end
+    end)
     
-    -- 4. Terrain minimal
     pcall(function()
         workspace.Terrain.WaterWaveSize = 0
         workspace.Terrain.WaterWaveSpeed = 0
@@ -397,33 +318,69 @@ local function applyBrutalAntiLag()
         workspace.Terrain.Decoration = false
     end)
     
-    -- 5. Player effects (semua player termasuk diri sendiri)
-    for _, plr in ipairs(players) do
+    -- Step 2: Cari karakter player (protected)
+    local protectedParts = {}
+    for _, plr in ipairs(Players:GetPlayers()) do
         if plr.Character then
-            for _, obj in ipairs(plr.Character:GetDescendants()) do
-                pcall(function()
-                    if obj:IsA("ParticleEmitter") or obj:IsA("Trail") or obj:IsA("Beam") then
-                        obj.Enabled = false
-                    end
-                    if obj:IsA("BasePart") then
-                        obj.CastShadow = false
-                    end
-                end)
+            protectedParts[plr.Character] = true
+            for _, part in ipairs(plr.Character:GetDescendants()) do
+                protectedParts[part] = true
             end
         end
     end
     
-    -- 6. Loop monitor (terus-menerus buat objek baru)
-    if state.brutalLagConn then
-        pcall(function() state.brutalLagConn:Disconnect() end)
-    end
-    
-    state.brutalLagConn = RunService.Heartbeat:Connect(function()
-        if not state.brutalLagEnabled then return end
-        -- Auto-scan objek baru tiap 5 detik aja biar gak lag
+    -- Step 3: Iterasi workspace (ASYNC biar gak freeze)
+    task.spawn(function()
+        local count = 0
+        local batch = 0
+        for _, obj in ipairs(workspace:GetDescendants()) do
+            local isProtected = false
+            local parent = obj
+            while parent and parent ~= workspace do
+                if protectedParts[parent] then isProtected = true break end
+                parent = parent.Parent
+            end
+            
+            if not isProtected then
+                pcall(function()
+                    if obj:IsA("ParticleEmitter") or obj:IsA("Smoke") or obj:IsA("Fire") or obj:IsA("Sparkles") then
+                        obj.Enabled = false
+                    elseif obj:IsA("Trail") or obj:IsA("Beam") then
+                        obj.Enabled = false
+                    elseif obj:IsA("Decal") or obj:IsA("Texture") then
+                        obj.Transparency = 1
+                    elseif obj:IsA("SurfaceAppearance") then
+                        obj.AlphaMode = Enum.AlphaMode.Overlay
+                        pcall(function() obj.ColorMap = "" end)
+                        pcall(function() obj.NormalMap = "" end)
+                    elseif obj:IsA("Sky") then
+                        obj.Parent = nil
+                    elseif obj:IsA("Atmosphere") then
+                        obj.Density = 0
+                        obj.Haze = 0
+                        obj.Glare = 0
+                    elseif obj:IsA("Clouds") then
+                        obj.Cover = 0
+                        obj.Density = 0
+                    elseif obj:IsA("BloomEffect") or obj:IsA("BlurEffect") or obj:IsA("SunRaysEffect") or obj:IsA("ColorCorrectionEffect") or obj:IsA("DepthOfFieldEffect") then
+                        obj.Enabled = false
+                    elseif obj:IsA("BasePart") then
+                        obj.CastShadow = false
+                        obj.Material = Enum.Material.SmoothPlastic
+                    end
+                end)
+            end
+            
+            count = count + 1
+            batch = batch + 1
+            
+            if batch >= 500 then
+                batch = 0
+                task.wait()
+            end
+        end
+        print("[VD] Brutal Anti-Lag: Scanned", count, "objects ✅")
     end)
-    
-    print("[VD] Brutal Anti-Lag: Applied")
 end
 
 local function resetBrutalAntiLag()
@@ -433,22 +390,40 @@ local function resetBrutalAntiLag()
         state.brutalLagConn = nil
     end
     
-    Lighting.GlobalShadows = true
-    Lighting.Brightness = 2
-    Lighting.Ambient = Color3.fromRGB(70, 70, 70)
-    Lighting.OutdoorAmbient = Color3.fromRGB(128, 128, 128)
-    Lighting.FogEnd = 100000
-    Lighting.FogStart = 0
+    pcall(function()
+        Lighting.GlobalShadows = true
+        Lighting.Brightness = 2
+        Lighting.Ambient = Color3.fromRGB(70, 70, 70)
+        Lighting.OutdoorAmbient = Color3.fromRGB(128, 128, 128)
+        Lighting.FogEnd = 100000
+        Lighting.FogStart = 0
+    end)
     
-    if Camera then
-        Camera.FarPlane = 100000
-    end
+    if Camera then Camera.FarPlane = 100000 end
     
     pcall(function()
         workspace.Terrain.WaterWaveSize = 0.15
         workspace.Terrain.WaterWaveSpeed = 10
         workspace.Terrain.WaterReflectance = 0.1
         workspace.Terrain.WaterTransparency = 0.5
+    end)
+    
+    -- Re-apply Fullbright & No Fog kalau masih aktif
+    task.defer(function()
+        if SETTINGS.FullbrightEnabled then
+            pcall(function()
+                Lighting.Brightness = 3
+                Lighting.ClockTime = 14
+                Lighting.Ambient = Color3.fromRGB(180, 180, 180)
+                Lighting.OutdoorAmbient = Color3.fromRGB(180, 180, 180)
+            end)
+        end
+        if SETTINGS.NoFogEnabled then
+            pcall(function()
+                Lighting.FogEnd = 100000
+                Lighting.FogStart = 0
+            end)
+        end
     end)
     
     print("[VD] Brutal Anti-Lag: RESET")
@@ -529,29 +504,52 @@ local function applyPlayerMods()
 end
 
 -- ═══════════════════════════════════════════════════════
--- MISC
+-- MISC (HORMATI ANTI-LAG)
 -- ═══════════════════════════════════════════════════════
 
 local function applyFullbright()
     if SETTINGS.FullbrightEnabled then
-        Lighting.Brightness = 3
-        Lighting.ClockTime = 14
-        Lighting.Ambient = Color3.fromRGB(180, 180, 180)
-        Lighting.OutdoorAmbient = Color3.fromRGB(180, 180, 180)
+        pcall(function()
+            Lighting.Brightness = 3
+            Lighting.ClockTime = 14
+            Lighting.Ambient = Color3.fromRGB(180, 180, 180)
+            Lighting.OutdoorAmbient = Color3.fromRGB(180, 180, 180)
+        end)
     else
-        Lighting.Brightness = 1
-        Lighting.Ambient = Color3.fromRGB(70, 70, 70)
-        Lighting.OutdoorAmbient = Color3.fromRGB(128, 128, 128)
+        if state.brutalLagEnabled then
+            pcall(function()
+                Lighting.Brightness = 0
+                Lighting.Ambient = Color3.fromRGB(0, 0, 0)
+                Lighting.OutdoorAmbient = Color3.fromRGB(0, 0, 0)
+            end)
+        else
+            pcall(function()
+                Lighting.Brightness = 1
+                Lighting.Ambient = Color3.fromRGB(70, 70, 70)
+                Lighting.OutdoorAmbient = Color3.fromRGB(128, 128, 128)
+            end)
+        end
     end
 end
 
 local function applyNoFog()
     if SETTINGS.NoFogEnabled then
-        Lighting.FogEnd = 100000
-        Lighting.FogStart = 0
+        pcall(function()
+            Lighting.FogEnd = 100000
+            Lighting.FogStart = 0
+        end)
     else
-        Lighting.FogEnd = 1000
-        Lighting.FogStart = 0
+        if state.brutalLagEnabled then
+            pcall(function()
+                Lighting.FogEnd = 100
+                Lighting.FogStart = 0
+            end)
+        else
+            pcall(function()
+                Lighting.FogEnd = 1000
+                Lighting.FogStart = 0
+            end)
+        end
     end
 end
 
@@ -568,7 +566,7 @@ task.spawn(function()
 end)
 
 -- ═══════════════════════════════════════════════════════
--- GUI — BOLONG STYLE
+-- GUI
 -- ═══════════════════════════════════════════════════════
 
 local playerGui = LocalPlayer:WaitForChild("PlayerGui")
@@ -642,7 +640,7 @@ local HeaderTitle = Instance.new("TextLabel")
 HeaderTitle.Size = UDim2.new(0, 200, 1, 0)
 HeaderTitle.Position = UDim2.fromOffset(38, 0)
 HeaderTitle.BackgroundTransparency = 1
-HeaderTitle.Text = "VD TOOLS  |  v5"
+HeaderTitle.Text = "VD TOOLS  |  v6"
 HeaderTitle.TextColor3 = C.text
 HeaderTitle.TextSize = 11
 HeaderTitle.Font = Enum.Font.GothamBold
@@ -1075,7 +1073,7 @@ local infoSub = Instance.new("TextLabel")
 infoSub.Size = UDim2.new(1, -20, 0, 42)
 infoSub.Position = UDim2.fromOffset(10, 24)
 infoSub.BackgroundTransparency = 1
-infoSub.Text = "Hapus semua efek, shadow, texture,\nparticle, decal. Terangin & percepat.\nKhusus HP kentang — hasil maksimal."
+infoSub.Text = "Hapus semua efek, shadow, texture,\nparticle, decal. Khusus HP kentang.\nAnti-lag hormati Fullbright & No Fog."
 infoSub.TextColor3 = C.textDim
 infoSub.TextSize = 9
 infoSub.Font = Enum.Font.Gotham
@@ -1111,19 +1109,35 @@ brutalSub.Font = Enum.Font.Gotham
 brutalSub.TextXAlignment = Enum.TextXAlignment.Left
 brutalSub.Parent = brutalBtn
 
-brutalBtn.MouseButton1Click:Connect(function()
+-- ⭐ TOGGLE FUNCTION
+local toggleBrutal = function()
     if not state.brutalLagEnabled then
-        applyBrutalAntiLag()
+        -- Update UI DULU (instan)
         brutalBtn.Text = "⚡ BRUTAL ANTI-LAG: ON ⚡"
         brutalBtn.BackgroundColor3 = C.success
         brutalSub.Text = "SEMUA fix aktif — HP ringan"
+        
+        -- Apply di background
+        task.spawn(function()
+            pcall(applyBrutalAntiLag)
+        end)
+        
+        print("[VD] Brutal: ON clicked")
     else
-        resetBrutalAntiLag()
         brutalBtn.Text = "⚡ BRUTAL ANTI-LAG: OFF ⚡"
         brutalBtn.BackgroundColor3 = C.danger
         brutalSub.Text = "Klik 1x → semua lag fix nyala"
+        
+        task.spawn(function()
+            pcall(resetBrutalAntiLag)
+        end)
+        
+        print("[VD] Brutal: OFF clicked")
     end
-end)
+end
+
+-- ⭐ Pake Activated (mobile + PC)
+brutalBtn.Activated:Connect(toggleBrutal)
 
 local tipsBox = Instance.new("Frame")
 tipsBox.Size = UDim2.new(1, -10, 0, 100)
@@ -1478,4 +1492,5 @@ for _, player in ipairs(Players:GetPlayers()) do
     if player ~= LocalPlayer then createESP(player) end
 end
 
-print("[VD TOOLS v5] Loaded! Brutal Anti-Lag: 1 Click")
+print("[VD TOOLS v6] Loaded!")
+print("[VD TOOLS v6] Brutal Anti-Lag: 1 Click (Hormati Fullbright & No Fog)")
