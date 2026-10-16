@@ -1,5 +1,5 @@
--- [[ SIMPLE ESP v3.1 — KILLER vs SURVIVOR ]]
--- Fitur: Compact UI, Anti-Rerun, Auto-Detect Role, Manual Mark, Fix Toggle OFF
+-- [[ SIMPLE ESP v4 — KILLER vs SURVIVOR ]]
+-- Fitur: Compact UI, Anti-Rerun, Auto-Detect, Manual Mark, Settings Toggle
 
 local env = (getgenv and getgenv()) or _G
 for _, name in ipairs({"SimpleESP_KillerSurvivor"}) do
@@ -38,6 +38,7 @@ local state = {
 }
 env.SimpleESP_KillerSurvivor = state
 
+-- ⭐ KONFIGURASI + TOGGLE DISPLAY
 local SETTINGS = {
     MaxDistance = 1000,
     UpdateRate = 0.1,
@@ -45,6 +46,13 @@ local SETTINGS = {
     KillerColor = Color3.fromRGB(255, 30, 30),
     UnknownColor = Color3.fromRGB(200, 200, 200),
     FillTransparency = 0.7,
+    
+    -- ⭐ DISPLAY TOGGLES
+    ShowBox = true,
+    ShowRole = true,
+    ShowName = true,
+    ShowDistance = true,
+    ShowHealth = true,
 }
 
 local function getRole(player)
@@ -152,6 +160,7 @@ local function createESP(player)
     container.BackgroundTransparency = 1
     container.Parent = billboard
     
+    -- Role
     local roleLabel = Instance.new("TextLabel")
     roleLabel.Size = UDim2.new(1, 0, 0, 16)
     roleLabel.Position = UDim2.new(0, 0, 0, 0)
@@ -163,6 +172,7 @@ local function createESP(player)
     roleLabel.Font = Enum.Font.GothamBold
     roleLabel.Parent = container
     
+    -- Name
     local nameLabel = Instance.new("TextLabel")
     nameLabel.Size = UDim2.new(1, 0, 0, 16)
     nameLabel.Position = UDim2.new(0, 0, 0, 16)
@@ -174,6 +184,7 @@ local function createESP(player)
     nameLabel.Font = Enum.Font.GothamBold
     nameLabel.Parent = container
     
+    -- Distance
     local distanceLabel = Instance.new("TextLabel")
     distanceLabel.Size = UDim2.new(1, 0, 0, 12)
     distanceLabel.Position = UDim2.new(0, 0, 0, 32)
@@ -186,6 +197,7 @@ local function createESP(player)
     distanceLabel.Font = Enum.Font.Gotham
     distanceLabel.Parent = container
     
+    -- Health
     local healthLabel = Instance.new("TextLabel")
     healthLabel.Size = UDim2.new(1, 0, 0, 12)
     healthLabel.Position = UDim2.new(0, 0, 0, 44)
@@ -248,15 +260,18 @@ local function updateESP()
                 local role = getRole(player)
                 local color = getColor(role)
                 
-                data.Highlight.Enabled = true
+                -- Highlight
+                data.Highlight.Enabled = SETTINGS.ShowBox
                 data.Highlight.Adornee = char
                 data.Highlight.FillColor = color
                 data.Highlight.OutlineColor = color
                 data.Highlight.FillTransparency = SETTINGS.FillTransparency
                 
+                -- Billboard
                 data.Billboard.Enabled = true
                 data.Billboard.Adornee = hrp
                 
+                -- ⭐ TOGGLE DISPLAY
                 if role == "killer" then
                     data.RoleLabel.Text = "KILLER"
                 elseif role == "survivor" then
@@ -265,11 +280,14 @@ local function updateESP()
                     data.RoleLabel.Text = "UNKNOWN"
                 end
                 data.RoleLabel.TextColor3 = color
+                data.RoleLabel.Visible = SETTINGS.ShowRole
                 
                 data.NameLabel.Text = player.Name
                 data.NameLabel.TextColor3 = color
+                data.NameLabel.Visible = SETTINGS.ShowName
                 
                 data.DistanceLabel.Text = distance .. "m"
+                data.DistanceLabel.Visible = SETTINGS.ShowDistance
                 
                 data.HealthLabel.Text = math.floor(humanoid.Health) .. " HP"
                 local hpPercent = humanoid.Health / humanoid.MaxHealth
@@ -278,6 +296,7 @@ local function updateESP()
                     255 * hpPercent,
                     100
                 )
+                data.HealthLabel.Visible = SETTINGS.ShowHealth
             end
         else
             data.Highlight.Enabled = false
@@ -289,9 +308,7 @@ end
 state.connections[#state.connections+1] = Players.PlayerAdded:Connect(function(player)
     player.CharacterAdded:Connect(function()
         task.wait(0.5)
-        if state.enabled then
-            createESP(player)
-        end
+        if state.enabled then createESP(player) end
     end)
     if player.Character and state.enabled then createESP(player) end
 end)
@@ -316,6 +333,7 @@ MainGui.DisplayOrder = 1000
 MainGui.Parent = playerGui
 state.guis[#state.guis+1] = MainGui
 
+-- Main Panel (kecil)
 local ControlFrame = Instance.new("Frame")
 ControlFrame.Size = UDim2.fromOffset(140, 80)
 ControlFrame.Position = UDim2.fromOffset(18, 100)
@@ -365,14 +383,31 @@ local TB = Instance.new("UICorner")
 TB.CornerRadius = UDim.new(0, 5)
 TB.Parent = ToggleBtn
 
+-- ⭐ SETTINGS BUTTON
+local SettingsBtn = Instance.new("TextButton")
+SettingsBtn.Size = UDim2.new(0.43, 0, 0, 22)
+SettingsBtn.Position = UDim2.new(0.05, 0, 0, 52)
+SettingsBtn.BackgroundColor3 = Color3.fromRGB(100, 116, 255)
+SettingsBtn.BorderSizePixel = 0
+SettingsBtn.Text = "SETTINGS"
+SettingsBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+SettingsBtn.TextSize = 8
+SettingsBtn.Font = Enum.Font.GothamBold
+SettingsBtn.Parent = ControlFrame
+
+local STB = Instance.new("UICorner")
+STB.CornerRadius = UDim.new(0, 5)
+STB.Parent = SettingsBtn
+
+-- MARK button
 local MarkBtn = Instance.new("TextButton")
-MarkBtn.Size = UDim2.new(0.9, 0, 0, 22)
-MarkBtn.Position = UDim2.new(0.05, 0, 0, 52)
+MarkBtn.Size = UDim2.new(0.43, 0, 0, 22)
+MarkBtn.Position = UDim2.new(0.52, 0, 0, 52)
 MarkBtn.BackgroundColor3 = Color3.fromRGB(255, 30, 30)
 MarkBtn.BorderSizePixel = 0
-MarkBtn.Text = "MARK KILLER"
+MarkBtn.Text = "MARK"
 MarkBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
-MarkBtn.TextSize = 9
+MarkBtn.TextSize = 8
 MarkBtn.Font = Enum.Font.GothamBold
 MarkBtn.Parent = ControlFrame
 
@@ -380,6 +415,78 @@ local MB = Instance.new("UICorner")
 MB.CornerRadius = UDim.new(0, 5)
 MB.Parent = MarkBtn
 
+-- ⭐ SETTINGS PANEL (popup)
+local SettingsPanel = Instance.new("Frame")
+SettingsPanel.Size = UDim2.fromOffset(160, 170)
+SettingsPanel.Position = UDim2.fromOffset(170, 100)
+SettingsPanel.BackgroundColor3 = Color3.fromRGB(20, 24, 34)
+SettingsPanel.BackgroundTransparency = 0.1
+SettingsPanel.BorderSizePixel = 0
+SettingsPanel.Visible = false
+SettingsPanel.Active = true
+SettingsPanel.Draggable = true
+SettingsPanel.Parent = MainGui
+
+local SPF = Instance.new("UICorner")
+SPF.CornerRadius = UDim.new(0, 10)
+SPF.Parent = SettingsPanel
+
+local SPF2 = Instance.new("UIStroke")
+SPF2.Color = Color3.fromRGB(62, 72, 104)
+SPF2.Thickness = 1
+SPF2.Transparency = 0.3
+SPF2.Parent = SettingsPanel
+
+local SPHeader = Instance.new("TextLabel")
+SPHeader.Size = UDim2.new(1, 0, 0, 20)
+SPHeader.BackgroundColor3 = Color3.fromRGB(100, 116, 255)
+SPHeader.BorderSizePixel = 0
+SPHeader.Text = "SETTINGS"
+SPHeader.TextColor3 = Color3.fromRGB(255, 255, 255)
+SPHeader.TextSize = 10
+SPHeader.Font = Enum.Font.GothamBold
+SPHeader.Parent = SettingsPanel
+
+local SPHC = Instance.new("UICorner")
+SPHC.CornerRadius = UDim.new(0, 10)
+SPHC.Parent = SPHeader
+
+-- ⭐ TOGGLE HELPER
+local function makeToggle(y, labelText, key)
+    local Btn = Instance.new("TextButton")
+    Btn.Size = UDim2.new(0.9, 0, 0, 22)
+    Btn.Position = UDim2.new(0.05, 0, 0, y)
+    Btn.BackgroundColor3 = SETTINGS[key] and Color3.fromRGB(50, 200, 50) or Color3.fromRGB(80, 80, 80)
+    Btn.BorderSizePixel = 0
+    Btn.Text = labelText .. ": " .. (SETTINGS[key] and "ON" or "OFF")
+    Btn.TextColor3 = Color3.fromRGB(255, 255, 255)
+    Btn.TextSize = 9
+    Btn.Font = Enum.Font.GothamBold
+    Btn.TextXAlignment = Enum.TextXAlignment.Left
+    Btn.Parent = SettingsPanel
+    
+    local padding = Instance.new("UIPadding")
+    padding.PaddingLeft = UDim.new(0, 8)
+    padding.Parent = Btn
+    
+    local c = Instance.new("UICorner")
+    c.CornerRadius = UDim.new(0, 5)
+    c.Parent = Btn
+    
+    Btn.MouseButton1Click:Connect(function()
+        SETTINGS[key] = not SETTINGS[key]
+        Btn.Text = labelText .. ": " .. (SETTINGS[key] and "ON" or "OFF")
+        Btn.BackgroundColor3 = SETTINGS[key] and Color3.fromRGB(50, 200, 50) or Color3.fromRGB(80, 80, 80)
+    end)
+end
+
+makeToggle(26, "Highlight Box", "ShowBox")
+makeToggle(52, "Role", "ShowRole")
+makeToggle(78, "Nama", "ShowName")
+makeToggle(104, "Jarak", "ShowDistance")
+makeToggle(130, "Darah", "ShowHealth")
+
+-- Show button
 local ShowBtn = Instance.new("TextButton")
 ShowBtn.Size = UDim2.fromOffset(36, 36)
 ShowBtn.Position = UDim2.fromOffset(18, 100)
@@ -398,6 +505,7 @@ local SB = Instance.new("UICorner")
 SB.CornerRadius = UDim.new(1, 0)
 SB.Parent = ShowBtn
 
+-- Hide button
 local HideBtn = Instance.new("TextButton")
 HideBtn.Size = UDim2.fromOffset(16, 16)
 HideBtn.Position = UDim2.new(1, -20, 0, 2)
@@ -413,15 +521,14 @@ local HB = Instance.new("UICorner")
 HB.CornerRadius = UDim.new(1, 0)
 HB.Parent = HideBtn
 
+-- Events
 state.connections[#state.connections+1] = ToggleBtn.MouseButton1Click:Connect(function()
     state.enabled = not state.enabled
     if state.enabled then
         ToggleBtn.Text = "ON"
         ToggleBtn.BackgroundColor3 = Color3.fromRGB(50, 200, 50)
         for _, player in ipairs(Players:GetPlayers()) do
-            if player ~= LocalPlayer then
-                createESP(player)
-            end
+            if player ~= LocalPlayer then createESP(player) end
         end
     else
         ToggleBtn.Text = "OFF"
@@ -430,6 +537,10 @@ state.connections[#state.connections+1] = ToggleBtn.MouseButton1Click:Connect(fu
             removeESP(player)
         end
     end
+end)
+
+state.connections[#state.connections+1] = SettingsBtn.MouseButton1Click:Connect(function()
+    SettingsPanel.Visible = not SettingsPanel.Visible
 end)
 
 state.connections[#state.connections+1] = MarkBtn.MouseButton1Click:Connect(function()
@@ -466,6 +577,7 @@ end)
 
 state.connections[#state.connections+1] = HideBtn.MouseButton1Click:Connect(function()
     ControlFrame.Visible = false
+    SettingsPanel.Visible = false
     ShowBtn.Visible = true
 end)
 
@@ -492,5 +604,5 @@ state.connections[#state.connections+1] = LocalPlayer.CharacterAdded:Connect(fun
     end
 end)
 
-print("[ESP v3.1] Loaded! Fix Toggle OFF + Compact UI + Anti-Rerun")
-print("[ESP v3.1] Killer: MERAH | Survivor: BIRU | Unknown: ABU")
+print("[ESP v4] Loaded! Compact UI + Settings Toggle + Anti-Rerun")
+print("[ESP v4] Killer: MERAH | Survivor: BIRU | Unknown: ABU")
