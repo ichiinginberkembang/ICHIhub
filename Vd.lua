@@ -1,5 +1,5 @@
--- [[ SIMPLE ESP v4 — KILLER vs SURVIVOR ]]
--- Fitur: Compact UI, Anti-Rerun, Auto-Detect, Manual Mark, Settings Toggle
+-- [[ SIMPLE ESP v5 — KILLER vs SURVIVOR ]]
+-- Fitur: Compact UI, Anti-Rerun, Auto-Detect, Manual Mark, Settings Toggle, Filter Role
 
 local env = (getgenv and getgenv()) or _G
 for _, name in ipairs({"SimpleESP_KillerSurvivor"}) do
@@ -47,12 +47,16 @@ local SETTINGS = {
     UnknownColor = Color3.fromRGB(200, 200, 200),
     FillTransparency = 0.7,
     
-    -- ⭐ DISPLAY TOGGLES
+    -- Display toggles
     ShowBox = true,
     ShowRole = true,
     ShowName = true,
     ShowDistance = true,
     ShowHealth = true,
+    
+    -- ⭐ FILTER ROLE
+    -- Pilihan: "both" / "killer" / "survivor"
+    FilterRole = "both",
 }
 
 local function getRole(player)
@@ -113,6 +117,14 @@ local function getColor(role)
     return SETTINGS.UnknownColor
 end
 
+-- ⭐ CEK APAKAH ROLE HARUS DITAMPILIN (FILTER)
+local function shouldShow(role)
+    if SETTINGS.FilterRole == "both" then return true end
+    if SETTINGS.FilterRole == "killer" then return role == "killer" end
+    if SETTINGS.FilterRole == "survivor" then return role == "survivor" end
+    return true
+end
+
 local function removeESP(player)
     local data = state.esps[player]
     if not data then return end
@@ -160,7 +172,6 @@ local function createESP(player)
     container.BackgroundTransparency = 1
     container.Parent = billboard
     
-    -- Role
     local roleLabel = Instance.new("TextLabel")
     roleLabel.Size = UDim2.new(1, 0, 0, 16)
     roleLabel.Position = UDim2.new(0, 0, 0, 0)
@@ -172,7 +183,6 @@ local function createESP(player)
     roleLabel.Font = Enum.Font.GothamBold
     roleLabel.Parent = container
     
-    -- Name
     local nameLabel = Instance.new("TextLabel")
     nameLabel.Size = UDim2.new(1, 0, 0, 16)
     nameLabel.Position = UDim2.new(0, 0, 0, 16)
@@ -184,7 +194,6 @@ local function createESP(player)
     nameLabel.Font = Enum.Font.GothamBold
     nameLabel.Parent = container
     
-    -- Distance
     local distanceLabel = Instance.new("TextLabel")
     distanceLabel.Size = UDim2.new(1, 0, 0, 12)
     distanceLabel.Position = UDim2.new(0, 0, 0, 32)
@@ -197,7 +206,6 @@ local function createESP(player)
     distanceLabel.Font = Enum.Font.Gotham
     distanceLabel.Parent = container
     
-    -- Health
     local healthLabel = Instance.new("TextLabel")
     healthLabel.Size = UDim2.new(1, 0, 0, 12)
     healthLabel.Position = UDim2.new(0, 0, 0, 44)
@@ -248,6 +256,15 @@ local function updateESP()
         local humanoid = char and char:FindFirstChildOfClass("Humanoid")
         
         if hrp and humanoid and humanoid.Health > 0 then
+            local role = getRole(player)
+            
+            -- ⭐ FILTER: Kalau role gak sesuai filter, sembunyiin
+            if not shouldShow(role) then
+                data.Highlight.Enabled = false
+                data.Billboard.Enabled = false
+                continue
+            end
+            
             local distance = 0
             if myPos then
                 distance = math.floor((hrp.Position - myPos).Magnitude)
@@ -257,21 +274,17 @@ local function updateESP()
                 data.Highlight.Enabled = false
                 data.Billboard.Enabled = false
             else
-                local role = getRole(player)
                 local color = getColor(role)
                 
-                -- Highlight
                 data.Highlight.Enabled = SETTINGS.ShowBox
                 data.Highlight.Adornee = char
                 data.Highlight.FillColor = color
                 data.Highlight.OutlineColor = color
                 data.Highlight.FillTransparency = SETTINGS.FillTransparency
                 
-                -- Billboard
                 data.Billboard.Enabled = true
                 data.Billboard.Adornee = hrp
                 
-                -- ⭐ TOGGLE DISPLAY
                 if role == "killer" then
                     data.RoleLabel.Text = "KILLER"
                 elseif role == "survivor" then
@@ -333,7 +346,6 @@ MainGui.DisplayOrder = 1000
 MainGui.Parent = playerGui
 state.guis[#state.guis+1] = MainGui
 
--- Main Panel (kecil)
 local ControlFrame = Instance.new("Frame")
 ControlFrame.Size = UDim2.fromOffset(140, 80)
 ControlFrame.Position = UDim2.fromOffset(18, 100)
@@ -383,7 +395,6 @@ local TB = Instance.new("UICorner")
 TB.CornerRadius = UDim.new(0, 5)
 TB.Parent = ToggleBtn
 
--- ⭐ SETTINGS BUTTON
 local SettingsBtn = Instance.new("TextButton")
 SettingsBtn.Size = UDim2.new(0.43, 0, 0, 22)
 SettingsBtn.Position = UDim2.new(0.05, 0, 0, 52)
@@ -399,7 +410,6 @@ local STB = Instance.new("UICorner")
 STB.CornerRadius = UDim.new(0, 5)
 STB.Parent = SettingsBtn
 
--- MARK button
 local MarkBtn = Instance.new("TextButton")
 MarkBtn.Size = UDim2.new(0.43, 0, 0, 22)
 MarkBtn.Position = UDim2.new(0.52, 0, 0, 52)
@@ -415,9 +425,9 @@ local MB = Instance.new("UICorner")
 MB.CornerRadius = UDim.new(0, 5)
 MB.Parent = MarkBtn
 
--- ⭐ SETTINGS PANEL (popup)
+-- ⭐ SETTINGS PANEL
 local SettingsPanel = Instance.new("Frame")
-SettingsPanel.Size = UDim2.fromOffset(160, 170)
+SettingsPanel.Size = UDim2.fromOffset(170, 265)
 SettingsPanel.Position = UDim2.fromOffset(170, 100)
 SettingsPanel.BackgroundColor3 = Color3.fromRGB(20, 24, 34)
 SettingsPanel.BackgroundTransparency = 0.1
@@ -451,7 +461,7 @@ local SPHC = Instance.new("UICorner")
 SPHC.CornerRadius = UDim.new(0, 10)
 SPHC.Parent = SPHeader
 
--- ⭐ TOGGLE HELPER
+-- Toggle helper
 local function makeToggle(y, labelText, key)
     local Btn = Instance.new("TextButton")
     Btn.Size = UDim2.new(0.9, 0, 0, 22)
@@ -485,6 +495,78 @@ makeToggle(52, "Role", "ShowRole")
 makeToggle(78, "Nama", "ShowName")
 makeToggle(104, "Jarak", "ShowDistance")
 makeToggle(130, "Darah", "ShowHealth")
+
+-- ⭐ SEPARATOR
+local Sep = Instance.new("Frame")
+Sep.Size = UDim2.new(0.9, 0, 0, 1)
+Sep.Position = UDim2.new(0.05, 0, 0, 158)
+Sep.BackgroundColor3 = Color3.fromRGB(62, 72, 104)
+Sep.BorderSizePixel = 0
+Sep.Parent = SettingsPanel
+
+local FilterLabel = Instance.new("TextLabel")
+FilterLabel.Size = UDim2.new(0.9, 0, 0, 16)
+FilterLabel.Position = UDim2.new(0.05, 0, 0, 164)
+FilterLabel.BackgroundTransparency = 1
+FilterLabel.Text = "FILTER ROLE"
+FilterLabel.TextColor3 = Color3.fromRGB(200, 200, 200)
+FilterLabel.TextSize = 9
+FilterLabel.Font = Enum.Font.GothamBold
+FilterLabel.TextXAlignment = Enum.TextXAlignment.Left
+FilterLabel.Parent = SettingsPanel
+
+-- ⭐ 3 TOMBOL FILTER ROLE
+local FilterBtns = {}
+local function updateFilterButtons()
+    for role, btn in pairs(FilterBtns) do
+        if SETTINGS.FilterRole == role then
+            btn.BackgroundColor3 = Color3.fromRGB(100, 116, 255)
+        else
+            btn.BackgroundColor3 = Color3.fromRGB(80, 80, 80)
+        end
+    end
+end
+
+local function makeFilterBtn(text, xPos, role)
+    local Btn = Instance.new("TextButton")
+    Btn.Size = UDim2.new(0.28, 0, 0, 22)
+    Btn.Position = UDim2.new(xPos, 0, 0, 182)
+    Btn.BackgroundColor3 = SETTINGS.FilterRole == role and Color3.fromRGB(100, 116, 255) or Color3.fromRGB(80, 80, 80)
+    Btn.BorderSizePixel = 0
+    Btn.Text = text
+    Btn.TextColor3 = Color3.fromRGB(255, 255, 255)
+    Btn.TextSize = 8
+    Btn.Font = Enum.Font.GothamBold
+    Btn.Parent = SettingsPanel
+    
+    local c = Instance.new("UICorner")
+    c.CornerRadius = UDim.new(0, 5)
+    c.Parent = Btn
+    
+    FilterBtns[role] = Btn
+    
+    Btn.MouseButton1Click:Connect(function()
+        SETTINGS.FilterRole = role
+        updateFilterButtons()
+    end)
+end
+
+makeFilterBtn("SEMUA", 0.05, "both")
+makeFilterBtn("KILLER", 0.36, "killer")
+makeFilterBtn("SURVIVOR", 0.67, "survivor")
+
+-- Info text
+local InfoFilter = Instance.new("TextLabel")
+InfoFilter.Size = UDim2.new(0.9, 0, 0, 40)
+InfoFilter.Position = UDim2.new(0.05, 0, 0, 210)
+InfoFilter.BackgroundTransparency = 1
+InfoFilter.Text = "Filter cuma nampilin role\nyang dipilih. Unknown tetep\nmuncul di SEMUA."
+InfoFilter.TextColor3 = Color3.fromRGB(150, 150, 150)
+InfoFilter.TextSize = 8
+InfoFilter.Font = Enum.Font.Gotham
+InfoFilter.TextWrapped = true
+InfoFilter.TextYAlignment = Enum.TextYAlignment.Top
+InfoFilter.Parent = SettingsPanel
 
 -- Show button
 local ShowBtn = Instance.new("TextButton")
@@ -604,5 +686,5 @@ state.connections[#state.connections+1] = LocalPlayer.CharacterAdded:Connect(fun
     end
 end)
 
-print("[ESP v4] Loaded! Compact UI + Settings Toggle + Anti-Rerun")
-print("[ESP v4] Killer: MERAH | Survivor: BIRU | Unknown: ABU")
+print("[ESP v5] Loaded! Compact UI + Settings + Filter Role + Anti-Rerun")
+print("[ESP v5] Filter: SEMUA | KILLER | SURVIVOR")
