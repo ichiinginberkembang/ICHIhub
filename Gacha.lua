@@ -1,6 +1,7 @@
 --[[
     ================================================
-    Blox Fruits - Auto Gacha (FINAL + WEBHOOK)
+    Blox Fruits - Auto Gacha (FINAL ULTIMATE)
+    Fitur: UI, Webhook High Tier, & FPS Boost
     ================================================
 ]]
 
@@ -12,12 +13,26 @@ local UserInputService  = game:GetService("UserInputService")
 local Remotes           = ReplicatedStorage:WaitForChild("Remotes")
 
 ---------- KONFIGURASI ----------
+-- GANTI PAKAI WEBHOOK BARU LU BIAR AMAN
 local WEBHOOK_URL = "https://discord.com/api/webhooks/1561728793226383510/PeYJqeHWViBXqs4M0VowG9xM-zk3Uupk2ta8UtWNUqh_R2IQaPIsxMIgZEXNnbRdJ2CM"
-local COOLDOWN    = 20   -- Jeda tiap roll (detik)
-local MAX_HISTORY = 30   -- Maks baris history di UI
+local COOLDOWN    = 20   
+local MAX_HISTORY = 30   
+local FPS_BOOST   = true -- Ubah ke false kalau gak mau grafiknya ancur
+
+-- DAFTAR BUAH HIGH TIER (Legendary & Mythical)
+local HIGH_TIER_FRUITS = {
+    -- Mythical
+    ["Dragon"] = true, ["Leopard"] = true, ["Kitsune"] = true, ["Dough"] = true, 
+    ["Venom"] = true, ["Shadow"] = true, ["Control"] = true, ["Spirit"] = true, 
+    ["Mammoth"] = true, ["T-Rex"] = true, ["Gas"] = true, ["Yeti"] = true,
+    -- Legendary
+    ["Buddha"] = true, ["Portal"] = true, ["Rumble"] = true, ["Phoenix"] = true, 
+    ["Blizzard"] = true, ["Gravity"] = true, ["Pain"] = true, ["Love"] = true, 
+    ["Spider"] = true, ["Sound"] = true
+}
 -------------------------------
 
--- 1. CLEANUP GUI LAMA (Biar gak numpuk kalau di-execute 2x)
+-- 1. CLEANUP GUI LAMA
 local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
 local oldGui = PlayerGui:FindFirstChild("AutoGachaUI")
 if oldGui then oldGui:Destroy() end
@@ -26,7 +41,75 @@ print("[GACHA] Script berhasil dimuat. Menunggu game load...")
 repeat task.wait(1) until game:IsLoaded() and LocalPlayer.Character
 
 -------------------------------------------------
--- Helper umum
+-- FUNGSI ANTI-LAG (FPS BOOST) DARI SCRIPT LAMA
+-------------------------------------------------
+function boostfps()
+    local Terrain = workspace:FindFirstChildOfClass('Terrain')
+    local Lighting = game:GetService("Lighting")
+    local Players = game:GetService("Players")
+
+    if Terrain then
+        Terrain.WaterWaveSize = 0
+        Terrain.WaterWaveSpeed = 0
+        Terrain.WaterReflectance = 0
+        Terrain.WaterTransparency = 1
+    end
+
+    pcall(function()
+        local Map = workspace:FindFirstChild("Map")
+        if Map then
+            for _, v in ipairs(Map:GetChildren()) do
+                local name = v.Name:lower()
+                if name:find("tree") or name:find("plant") or name:find("rock") or
+                   name:find("fence") or name:find("decoration") or name:find("grass") or
+                   name:find("bush") or name:find("flower") then
+                    pcall(function() v:Destroy() end)
+                end
+            end
+        end
+        for _, v in ipairs(workspace:GetChildren()) do
+            if v.Name == "Clouds" or v.Name == "Cloud" then
+                pcall(function() v:Destroy() end)
+            end
+        end
+    end)
+
+    Lighting.GlobalShadows = false
+    Lighting.FogEnd = 9e9
+    Lighting.FogStart = 9e9
+    pcall(function() Lighting:ClearAllChildren() end)
+    pcall(function() settings().Rendering.QualityLevel = 1 end)
+
+    pcall(function()
+        for _, v in ipairs(game:GetDescendants()) do
+            if v:IsA("ParticleEmitter") or v:IsA("Trail") then
+                pcall(function() v.Lifetime = NumberRange.new(0) end)
+            elseif v:IsA("Sound") then
+                pcall(function() v:Destroy() end)
+            end
+        end
+    end)
+
+    local function cleanChar(char)
+        task.wait(0.5)
+        for _, part in pairs(char:GetChildren()) do
+            if part:IsA("Accessory") or part.Name == "Radio" then
+                pcall(function() part:Destroy() end)
+            end
+        end
+    end
+    
+    for _, p in pairs(Players:GetChildren()) do
+        if p.Character then cleanChar(p.Character) end
+        p.CharacterAdded:Connect(cleanChar)
+    end
+    print("[FPS BOOST] Grafik berhasil diturunkan ke mode kentang!")
+end
+
+if FPS_BOOST then boostfps() end
+
+-------------------------------------------------
+-- HELPER
 -------------------------------------------------
 local function Create(className, props)
     local inst = Instance.new(className)
@@ -38,9 +121,6 @@ local function Create(className, props)
     return inst
 end
 
--------------------------------------------------
--- 0. Cari fungsi request (executor)
--------------------------------------------------
 local function GetRequestFn()
     if syn and syn.request then return syn.request end
     if type(request) == "function" then return request end
@@ -52,39 +132,33 @@ local function GetRequestFn()
     return nil
 end
 
-local function JsonEscape(s)
-    s = tostring(s)
-    s = s:gsub("\\", "\\\\"):gsub('"', '\\"'):gsub("\n", "\\n"):gsub("\r", "\\r"):gsub("\t", "\\t")
-    return s
+local function IsHighTier(fruitName)
+    local lowerName = string.lower(tostring(fruitName))
+    for keyword, _ in pairs(HIGH_TIER_FRUITS) do
+        if string.find(lowerName, string.lower(keyword)) then
+            return true
+        end
+    end
+    return false
 end
 
 -------------------------------------------------
--- 1. UI RINGAN (tanpa library)
+-- 2. UI RINGAN
 -------------------------------------------------
 local screenGui = Create("ScreenGui", {
-    Name = "AutoGachaUI",
-    ResetOnSpawn = false,
-    IgnoreGuiInset = true,
-    ZIndexBehavior = Enum.ZIndexBehavior.Sibling,
-    Parent = PlayerGui,
+    Name = "AutoGachaUI", ResetOnSpawn = false, IgnoreGuiInset = true,
+    ZIndexBehavior = Enum.ZIndexBehavior.Sibling, Parent = PlayerGui,
 })
 
 local main = Create("Frame", {
-    Name = "Main",
-    Size = UDim2.new(0, 270, 0, 360),
-    Position = UDim2.new(0, 16, 0.5, -180),
-    BackgroundColor3 = Color3.fromRGB(22, 22, 28),
-    BorderSizePixel = 0,
-    Parent = screenGui,
+    Name = "Main", Size = UDim2.new(0, 270, 0, 360), Position = UDim2.new(0, 16, 0.5, -180),
+    BackgroundColor3 = Color3.fromRGB(22, 22, 28), BorderSizePixel = 0, Parent = screenGui,
 })
 Create("UICorner", { CornerRadius = UDim.new(0, 10) }, main)
 pcall(function() Create("UIStroke", { Color = Color3.fromRGB(70, 70, 95), Thickness = 1, Parent = main }) end)
 
 local titleBar = Create("Frame", {
-    Size = UDim2.new(1, 0, 0, 34),
-    BackgroundColor3 = Color3.fromRGB(30, 30, 40),
-    BorderSizePixel = 0,
-    Parent = main,
+    Size = UDim2.new(1, 0, 0, 34), BackgroundColor3 = Color3.fromRGB(30, 30, 40), BorderSizePixel = 0, Parent = main,
 })
 Create("UICorner", { CornerRadius = UDim.new(0, 10) }, titleBar)
 Create("Frame", {
@@ -95,7 +169,7 @@ Create("Frame", {
 Create("TextLabel", {
     BackgroundTransparency = 1, Position = UDim2.new(0, 12, 0, 0), Size = UDim2.new(1, -50, 1, 0),
     Font = Enum.Font.GothamBold, TextSize = 14, TextColor3 = Color3.fromRGB(255, 255, 255),
-    TextXAlignment = Enum.TextXAlignment.Left, Text = "🍒 Auto Gacha", Parent = titleBar,
+    TextXAlignment = Enum.TextXAlignment.Left, Text = "🍒 Auto Gacha (Filter)", Parent = titleBar,
 })
 
 local minBtn = Create("TextButton", {
@@ -115,7 +189,6 @@ local statusLabel = Create("TextLabel", {
 })
 
 local STATUS_COLORS = { ok = Color3.fromRGB(80, 220, 130), fail = Color3.fromRGB(255, 90, 90), wait = Color3.fromRGB(255, 200, 80), info = Color3.fromRGB(140, 180, 255) }
-
 local function SetStatus(state, text)
     statusLabel.Text = "Status: " .. text
     statusLabel.TextColor3 = STATUS_COLORS[state] or STATUS_COLORS.info
@@ -144,7 +217,7 @@ local historyScroll = Create("ScrollingFrame", {
 })
 Create("UIListLayout", { Padding = UDim.new(0, 4), SortOrder = Enum.SortOrder.LayoutOrder, Parent = historyScroll })
 
-local function AddHistory(fruitName)
+local function AddHistory(fruitName, isHigh)
     orderCounter = orderCounter - 1
     historyCount = historyCount + 1
 
@@ -154,15 +227,16 @@ local function AddHistory(fruitName)
     })
     Create("UICorner", { CornerRadius = UDim.new(0, 6) }, entry)
 
+    local barColor = isHigh and Color3.fromRGB(80, 220, 130) or Color3.fromRGB(100, 100, 100)
     local bar = Create("Frame", {
         Size = UDim2.new(0, 4, 1, -8), Position = UDim2.new(0, 4, 0, 4),
-        BackgroundColor3 = Color3.fromRGB(80, 220, 130), BorderSizePixel = 0, Parent = entry,
+        BackgroundColor3 = barColor, BorderSizePixel = 0, Parent = entry,
     })
     Create("UICorner", { CornerRadius = UDim.new(1, 0) }, bar)
 
     Create("TextLabel", {
         BackgroundTransparency = 1, Position = UDim2.new(0, 15, 0, 0), Size = UDim2.new(1, -80, 1, 0),
-        Font = Enum.Font.GothamSemibold, TextSize = 13, TextColor3 = Color3.fromRGB(240, 240, 245),
+        Font = Enum.Font.GothamSemibold, TextSize = 13, TextColor3 = isHigh and Color3.fromRGB(255, 255, 255) or Color3.fromRGB(180, 180, 180),
         TextXAlignment = Enum.TextXAlignment.Left, TextTruncate = Enum.TextTruncate.AtEnd,
         Text = tostring(fruitName), Parent = entry,
     })
@@ -223,33 +297,27 @@ UpdateCounter()
 SetStatus("info", "Script aktif. Menunggu roll...")
 
 -------------------------------------------------
--- 2. DISCORD WEBHOOK
+-- 3. DISCORD WEBHOOK
 -------------------------------------------------
 local function SendWebhook(fruitName, storedList)
-    if WEBHOOK_URL == nil or WEBHOOK_URL == "" then return false, "Webhook belum diisi" end
-    if not requestFn then
-        webhookState = "TANPA request"
-        UpdateCounter()
-        return false, "Executor tidak punya fungsi request"
-    end
+    if WEBHOOK_URL == nil or WEBHOOK_URL == "" then return false end
+    if not requestFn then return false end
 
     local playerName    = LocalPlayer.Name
     local displayName   = LocalPlayer.DisplayName
     local timestamp     = os.date("!%Y-%m-%dT%H:%M:%SZ")
     local waktuLokal    = os.date("%Y-%m-%d %H:%M:%S")
-    local storedText    = (#storedList > 0) and table.concat(storedList, ", ") or "Belum dicek"
 
     local payload = {
         username = "Blox Gacha Bot",
         embeds = {{
-            title = "Berhasil Mendapatkan Buah!",
+            title = "🔥 HIGH TIER FRUIT OBTAINED! 🔥",
             description = "**" .. displayName .. "** (" .. playerName .. ") mendapatkan **" .. tostring(fruitName) .. "**",
-            color = 6531080,
+            color = 16711680, -- Warna Merah
             fields = {
                 { name = "Player",    value = displayName .. " (@" .. playerName .. ")", inline = false },
                 { name = "Buah",      value = "**" .. tostring(fruitName) .. "**",       inline = true  },
                 { name = "Timestamp", value = "`" .. waktuLokal .. "`",                 inline = true  },
-                { name = "Disimpan",  value = "`" .. storedText .. "`",                 inline = false },
             },
             timestamp = timestamp,
             footer = { text = "Auto Gacha - Blox Fruits" },
@@ -257,40 +325,15 @@ local function SendWebhook(fruitName, storedList)
     }
 
     local okEnc, body = pcall(function() return HttpService:JSONEncode(payload) end)
-    if not okEnc or type(body) ~= "string" then
-        body = '{"embeds":[{"title":"Berhasil Mendapatkan Buah!",'
-            .. '"description":"' .. JsonEscape(displayName .. " (" .. playerName .. ") mendapatkan " .. tostring(fruitName)) .. '",'
-            .. '"fields":['
-            .. '{"name":"Player","value":"' .. JsonEscape(displayName .. " (@" .. playerName .. ")") .. '"},'
-            .. '{"name":"Buah","value":"' .. JsonEscape(fruitName) .. '"},'
-            .. '{"name":"Timestamp","value":"' .. waktuLokal .. '"}],'
-            .. '"timestamp":"' .. timestamp .. '"}]}'
-    end
+    if not okEnc or type(body) ~= "string" then return false end
 
-    local ok, res = pcall(function()
-        return requestFn({ Url = WEBHOOK_URL, Method = "POST", Headers = { ["Content-Type"] = "application/json" }, Body = body })
+    pcall(function()
+        requestFn({ Url = WEBHOOK_URL, Method = "POST", Headers = { ["Content-Type"] = "application/json" }, Body = body })
     end)
-
-    if not ok then
-        webhookState = "ERROR" UpdateCounter()
-        print("[GACHA] Gagal kirim webhook: " .. tostring(res))
-        return false, tostring(res)
-    end
-
-    local code = (type(res) == "table") and res.StatusCode or nil
-    if code and (code < 200 or code >= 300) then
-        webhookState = "ERROR" UpdateCounter()
-        print("[GACHA] Webhook ditolak, status: " .. tostring(code))
-        return false, "HTTP " .. tostring(code)
-    end
-
-    webhookState = "ON" UpdateCounter()
-    print("[GACHA] Webhook terkirim ke Discord.")
-    return true
 end
 
 -------------------------------------------------
--- 3. FUNGSI GACHA & SIMPEN
+-- 4. FUNGSI GACHA & SIMPEN
 -------------------------------------------------
 local function RollFruit()
     local ok, res = pcall(function() return Remotes.CommF_:InvokeServer("Cousin", "Buy") end)
@@ -343,9 +386,7 @@ local function StoreFruit()
         local okStore = pcall(function() Remotes.CommF_:InvokeServer("StoreFruit", fruitName, tool) end)
         if okStore then
             table.insert(stored, fruitName)
-            print("[GACHA] Berhasil menyimpan buah ke Chest: " .. fruitName)
-        else
-            print("[GACHA] Gagal menyimpan buah: " .. fruitName)
+            print("[GACHA] Disimpan ke Chest: " .. fruitName)
         end
         task.wait(0.5)
     end
@@ -353,11 +394,11 @@ local function StoreFruit()
 end
 
 -------------------------------------------------
--- 4. LOOP UTAMA
+-- 5. LOOP UTAMA
 -------------------------------------------------
 local function CooldownWait(prefix)
     for i = COOLDOWN, 1, -1 do
-        SetStatus("wait", prefix .. "  •  Menunggu Cooldown (" .. i .. "s)")
+        SetStatus("wait", prefix .. "  •  Cooldown (" .. i .. "s)")
         task.wait(1)
     end
 end
@@ -370,22 +411,28 @@ task.spawn(function()
         local result = RollFruit()
 
         if result then
-            print("[GACHA] BERHASIL DAPET BUAH! Memproses...")
             local stored = StoreFruit()
             local fruitName = ExtractFruitName(result)
             if (not fruitName) and #stored > 0 then fruitName = table.concat(stored, ", ") end
             fruitName = fruitName or "Buah Misteri"
 
-            AddHistory(fruitName)
-            SetStatus("ok", "Berhasil: " .. fruitName)
-            print("[GACHA] Buah didapat: " .. tostring(fruitName))
+            local isHigh = IsHighTier(fruitName)
 
-            SendWebhook(fruitName, stored) 
+            AddHistory(fruitName, isHigh)
+            SetStatus("ok", "Berhasil: " .. fruitName)
+            
+            if isHigh then
+                print("[GACHA] 🔥 HIGH TIER! Mengirim ke Discord: " .. fruitName)
+                SendWebhook(fruitName, stored)
+            else
+                print("[GACHA] Buah biasa (" .. fruitName .. "), webhook dilewati.")
+            end
+
             task.wait(1.5)
-            CooldownWait("Berhasil: " .. fruitName)
+            CooldownWait("Berhasil")
         else
-            print("[GACHA] Gagal roll (Cooldown / Belum Lv 50 / Kurang Uang).")
-            CooldownWait("Gagal roll")
+            print("[GACHA] Gagal roll.")
+            CooldownWait("Gagal")
         end
     end
 end)
