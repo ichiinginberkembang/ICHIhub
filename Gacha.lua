@@ -1,7 +1,7 @@
 --[[
     ================================================
-    Blox Fruits - Auto Gacha (FINAL ULTIMATE)
-    Fitur: UI, Webhook High Tier, & FPS Boost
+    Blox Fruits - Auto Gacha (FINAL ULTIMATE + ANTI-BUG)
+    Fitur: UI, Webhook High Tier, FPS Boost, Diffing Log
     ================================================
 ]]
 
@@ -13,19 +13,16 @@ local UserInputService  = game:GetService("UserInputService")
 local Remotes           = ReplicatedStorage:WaitForChild("Remotes")
 
 ---------- KONFIGURASI ----------
--- GANTI PAKAI WEBHOOK BARU LU BIAR AMAN
 local WEBHOOK_URL = "https://discord.com/api/webhooks/1561728793226383510/PeYJqeHWViBXqs4M0VowG9xM-zk3Uupk2ta8UtWNUqh_R2IQaPIsxMIgZEXNnbRdJ2CM"
 local COOLDOWN    = 20   
 local MAX_HISTORY = 30   
-local FPS_BOOST   = true -- Ubah ke false kalau gak mau grafiknya ancur
+local FPS_BOOST   = true 
 
 -- DAFTAR BUAH HIGH TIER (Legendary & Mythical)
 local HIGH_TIER_FRUITS = {
-    -- Mythical
     ["Dragon"] = true, ["Leopard"] = true, ["Kitsune"] = true, ["Dough"] = true, 
     ["Venom"] = true, ["Shadow"] = true, ["Control"] = true, ["Spirit"] = true, 
     ["Mammoth"] = true, ["T-Rex"] = true, ["Gas"] = true, ["Yeti"] = true,
-    -- Legendary
     ["Buddha"] = true, ["Portal"] = true, ["Rumble"] = true, ["Phoenix"] = true, 
     ["Blizzard"] = true, ["Gravity"] = true, ["Pain"] = true, ["Love"] = true, 
     ["Spider"] = true, ["Sound"] = true
@@ -41,7 +38,7 @@ print("[GACHA] Script berhasil dimuat. Menunggu game load...")
 repeat task.wait(1) until game:IsLoaded() and LocalPlayer.Character
 
 -------------------------------------------------
--- FUNGSI ANTI-LAG (FPS BOOST) DARI SCRIPT LAMA
+-- FUNGSI ANTI-LAG (FPS BOOST)
 -------------------------------------------------
 function boostfps()
     local Terrain = workspace:FindFirstChildOfClass('Terrain')
@@ -89,20 +86,6 @@ function boostfps()
             end
         end
     end)
-
-    local function cleanChar(char)
-        task.wait(0.5)
-        for _, part in pairs(char:GetChildren()) do
-            if part:IsA("Accessory") or part.Name == "Radio" then
-                pcall(function() part:Destroy() end)
-            end
-        end
-    end
-    
-    for _, p in pairs(Players:GetChildren()) do
-        if p.Character then cleanChar(p.Character) end
-        p.CharacterAdded:Connect(cleanChar)
-    end
     print("[FPS BOOST] Grafik berhasil diturunkan ke mode kentang!")
 end
 
@@ -140,6 +123,30 @@ local function IsHighTier(fruitName)
         end
     end
     return false
+end
+
+-- Fungsi Snapshot (Mencatat isi tas)
+local function GetBackpackFruits()
+    local fruits = {}
+    local backpack = LocalPlayer:FindFirstChild("Backpack")
+    local char = LocalPlayer.Character
+    
+    local function scan(container)
+        if container then
+            for _, item in ipairs(container:GetChildren()) do
+                if item:IsA("Tool") and (string.find(item.Name, "Fruit") or item.ToolTip == "Blox Fruit") then
+                    local name = item:GetAttribute("OriginalName") or item.Name
+                    if not fruits[name] then
+                        fruits[name] = {count = 0, tool = item}
+                    end
+                    fruits[name].count = fruits[name].count + 1
+                end
+            end
+        end
+    end
+    scan(backpack)
+    scan(char)
+    return fruits
 end
 
 -------------------------------------------------
@@ -299,7 +306,7 @@ SetStatus("info", "Script aktif. Menunggu roll...")
 -------------------------------------------------
 -- 3. DISCORD WEBHOOK
 -------------------------------------------------
-local function SendWebhook(fruitName, storedList)
+local function SendWebhook(fruitName)
     if WEBHOOK_URL == nil or WEBHOOK_URL == "" then return false end
     if not requestFn then return false end
 
@@ -313,7 +320,7 @@ local function SendWebhook(fruitName, storedList)
         embeds = {{
             title = "🔥 HIGH TIER FRUIT OBTAINED! 🔥",
             description = "**" .. displayName .. "** (" .. playerName .. ") mendapatkan **" .. tostring(fruitName) .. "**",
-            color = 16711680, -- Warna Merah
+            color = 16711680,
             fields = {
                 { name = "Player",    value = displayName .. " (@" .. playerName .. ")", inline = false },
                 { name = "Buah",      value = "**" .. tostring(fruitName) .. "**",       inline = true  },
@@ -333,7 +340,7 @@ local function SendWebhook(fruitName, storedList)
 end
 
 -------------------------------------------------
--- 4. FUNGSI GACHA & SIMPEN
+-- 4. FUNGSI GACHA
 -------------------------------------------------
 local function RollFruit()
     local ok, res = pcall(function() return Remotes.CommF_:InvokeServer("Cousin", "Buy") end)
@@ -351,50 +358,8 @@ local function RollFruit()
     return nil
 end
 
-local function ExtractFruitName(res)
-    local t = type(res)
-    if t == "string" then
-        if res ~= "" then return res end
-    elseif t == "table" then
-        local name = res.Name or res.Fruit or res.ItemName or res.Item or res[1]
-        if type(name) == "string" and name ~= "" then return name end
-    elseif typeof(res) == "Instance" then
-        return res:GetAttribute("OriginalName") or res.Name
-    end
-    return nil
-end
-
-local function StoreFruit()
-    task.wait(1.5)
-    local backpack = LocalPlayer:FindFirstChild("Backpack")
-    local char = LocalPlayer.Character
-    local list, stored = {}, {}
-
-    if backpack then
-        for _, item in ipairs(backpack:GetChildren()) do
-            if item:IsA("Tool") and (string.find(item.Name, "Fruit") or item.ToolTip == "Blox Fruit") then table.insert(list, item) end
-        end
-    end
-    if char then
-        for _, item in ipairs(char:GetChildren()) do
-            if item:IsA("Tool") and (string.find(item.Name, "Fruit") or item.ToolTip == "Blox Fruit") then table.insert(list, item) end
-        end
-    end
-
-    for _, tool in ipairs(list) do
-        local fruitName = tool:GetAttribute("OriginalName") or tool.Name
-        local okStore = pcall(function() Remotes.CommF_:InvokeServer("StoreFruit", fruitName, tool) end)
-        if okStore then
-            table.insert(stored, fruitName)
-            print("[GACHA] Disimpan ke Chest: " .. fruitName)
-        end
-        task.wait(0.5)
-    end
-    return stored
-end
-
 -------------------------------------------------
--- 5. LOOP UTAMA
+-- 5. LOOP UTAMA (DENGAN SISTEM DIFFING / SNAPSHOT)
 -------------------------------------------------
 local function CooldownWait(prefix)
     for i = COOLDOWN, 1, -1 do
@@ -408,24 +373,63 @@ print("[GACHA] Mulai nyari buah...")
 task.spawn(function()
     while true do
         SetStatus("info", "Sedang roll gacha...")
+        
+        -- 1. FOTO TAS SEBELUM GACHA
+        local preFruits = GetBackpackFruits() 
+        
+        -- 2. ROLL GACHA
         local result = RollFruit()
 
         if result then
-            local stored = StoreFruit()
-            local fruitName = ExtractFruitName(result)
-            if (not fruitName) and #stored > 0 then fruitName = table.concat(stored, ", ") end
-            fruitName = fruitName or "Buah Misteri"
-
-            local isHigh = IsHighTier(fruitName)
-
-            AddHistory(fruitName, isHigh)
-            SetStatus("ok", "Berhasil: " .. fruitName)
+            task.wait(2) -- Tunggu animasi buah masuk tas
             
-            if isHigh then
-                print("[GACHA] 🔥 HIGH TIER! Mengirim ke Discord: " .. fruitName)
-                SendWebhook(fruitName, stored)
+            -- 3. FOTO TAS SESUDAH GACHA
+            local postFruits = GetBackpackFruits()
+            local newFruitsFound = {}
+            local storedFruits = {}
+
+            -- 4. BANDINGKAN: Cari buah yang nambah
+            for fruitName, data in pairs(postFruits) do
+                local preCount = preFruits[fruitName] and preFruits[fruitName].count or 0
+                if data.count > preCount then
+                    -- Berarti ini buah baru!
+                    table.insert(newFruitsFound, fruitName)
+                    
+                    -- Simpan otomatis ke chest
+                    local okStore = pcall(function() Remotes.CommF_:InvokeServer("StoreFruit", fruitName, data.tool) end)
+                    if okStore then
+                        table.insert(storedFruits, fruitName)
+                        print("[GACHA] Disimpan ke Chest: " .. fruitName)
+                    end
+                end
+            end
+
+            -- 5. PROSES HASIL
+            if #newFruitsFound > 0 then
+                -- Gabungin nama buah (kalau misal dapet 2 sekaligus)
+                local finalFruitName = table.concat(newFruitsFound, ", ")
+                local isHigh = false
+                
+                -- Cek apakah ada yang High Tier
+                for _, fName in ipairs(newFruitsFound) do
+                    if IsHighTier(fName) then
+                        isHigh = true
+                        break
+                    end
+                end
+
+                AddHistory(finalFruitName, isHigh)
+                SetStatus("ok", "Berhasil: " .. finalFruitName)
+                
+                if isHigh then
+                    print("[GACHA] 🔥 HIGH TIER! Mengirim ke Discord: " .. finalFruitName)
+                    SendWebhook(finalFruitName)
+                else
+                    print("[GACHA] Buah biasa (" .. finalFruitName .. "), webhook dilewati.")
+                end
             else
-                print("[GACHA] Buah biasa (" .. fruitName .. "), webhook dilewati.")
+                print("[GACHA] Roll sukses, tapi tidak ada buah baru di tas (Mungkin tas penuh?).")
+                SetStatus("fail", "Tas Penuh / Gagal Deteksi")
             end
 
             task.wait(1.5)
