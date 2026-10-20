@@ -1,0 +1,884 @@
+--[[
+    ============================================================
+    Blox Fruits - AUTO PARK TRADE  (rev.7)
+    ============================================================
+    Unload: getgenv().BloxParkAutoTrade.Unload()
+    ============================================================
+]]
+
+local Players           = game:GetService("Players")
+local UserInputService  = game:GetService("UserInputService")
+local CollectionService = game:GetService("CollectionService")
+
+local LocalPlayer = Players.LocalPlayer
+local PlayerGui   = LocalPlayer:WaitForChild("PlayerGui")
+
+local PIN_FILE = "BloxTrade_Pin.txt"
+
+---------------------------------------------------------------
+-- KONFIGURASI
+---------------------------------------------------------------
+local CONFIG = {
+    Areas = {
+        { Name = "Cafe (Sea 2)",    Short = "Cafe",    Center = Vector3.new(-396.4, 73.0, 296.4),       Radius = 15 },
+        { Name = "Mansion (Sea 3)", Short = "Mansion", Center = Vector3.new(-12556.6, 312.8, -7628.8),  Radius = 15 },
+    },
+    TableRadius   = 8,
+    PollIdle      = 0.80,
+    PollTrade     = 0.15,
+    KickCooldown  = 2.50,
+    KickGrace     = 0.80,
+    ClaimTimeout  = 1.50,
+    SeatBlockTime = 10.0,
+    TravelSpeed   = 90,
+    TravelStep    = 0.05,
+    MaxTravelTime = 4.00,
+    ArriveDist    = 1.5,
+    SettleTime    = 0.35,
+    SitReach      = 3.0,
+    GhostDistance = 12.0,
+    MaxSeatDist   = 1500,
+    PartnerRadius = 12,
+    SeatRetry     = 2.00,
+    UiScanInterval = 0.40,
+}
+
+local SEAT_TAG = "BloxParkTradeSeat"
+local SEAT_HINTS  = { "chair", "seat", "stool", "sit", "trade" }
+local TABLE_HINTS = { "table", "trade", "desk", "counter" }
+
+---------------------------------------------------------------
+-- STATE & HELPER
+---------------------------------------------------------------
+local STATE = {
+    running     = false, alive       = true,  resetting   = false,
+    traveling   = false, tradeOpen   = false, target      = "",
+    seat        = nil,   seatArea    = nil,   pinSeat     = nil,
+    tradeUi     = nil,   move        = nil,   seatBlock   = {},
+    ghostSeen   = {},    lastKick    = 0,     lastSeatTry = 0,
+    lastUiScan  = 0,     wrongCount  = 0,     sitFails    = 0,
+    errCount    = 0,     conns       = {},
+}
+
+local COL = { good = Color3.fromRGB(90, 220, 120), bad = Color3.fromRGB(235, 90, 90), warn = Color3.fromRGB(240, 200, 90), idle = Color3.fromRGB(185, 185, 195) }
+
+local function Connect(signal, fn)
+    local conn = signal:Connect(fn)
+    table.insert(STATE.conns, conn)
+    return conn
+end
+
+local function Create(className, props)
+    local inst = Instance.new(className)
+    local parent = nil
+    for k, v in pairs(props) do
+        if k == "Parent" then parent = v else inst[k] = v end
+    end
+    if parent then inst.Parent = parent end
+    return inst
+end
+
+local function GetCharParts()
+    local char = LocalPlayer.Character
+    if not char then return nil end
+    local hum = char:FindFirstChildOfClass("Humanoid")
+    local hrp = char:FindFirstChild("HumanoidRootPart")
+    if not hum or not hrp or hum.Health <= 0 then return nil end
+    return char, hum, hrp
+end
+
+local function Trim(s) return (tostring(s):gsub("^%s+", ""):gsub("%s+$", "")) end
+
+local function NameHas(name, hints)
+    local low = string.lower(tostring(name or ""))
+    if low == "" then return false end
+    for i = 1, #hints do
+        if string.find(low, hints[i], 1, true) then return true end
+    end
+    return false
+end
+
+local function NameMatch(inst, hints)
+    local cur, depth = inst, 0
+    while cur and depth < 3 do
+        if NameHas(cur.Name, hints) then return true end
+        cur = cur.Parent
+        depth = depth + 1
+    end
+    return false
+end
+
+---------------------------------------------------------------
+-- PHANTOM SEAT
+---------------------------------------------------------------
+local function IsSeatBlacklisted(seat)
+    local untilTime = STATE.seatBlock[seat]
+    if not untilTime then return false end
+    if os.clock() >= untilTime then STATE.seatBlock[seat] = nil return false end
+    return true
+end
+
+local function BlacklistSeat(seat, reason)
+    if not seat then return end
+    STATE.seatBlock[seat] = os.clock() + CONFIG.SeatBlockTime
+    print(string.format("[PARK] Kursi diblokir %.0fs: %s (%s)", CONFIG.SeatBlockTime, tostring(seat.Name), tostring(reason)))
+end
+
+local function ClearSeatBlock(seat) if seat then STATE.seatBlock[seat] = nil end end
+
+local function IsOccupantReal(seat, occupant)
+    if not occupant then return false end
+    local okType, isHumanoid = pcall(function() return occupant:IsA("Humanoid") end)
+    if not okType or not isHumanoid then return false end
+
+    local okState, seated = pcall(function() return occupant.Sit == true and occupant.SeatPart == seat and occupant.Health > 0 end)
+    if not okState or not seated then return false end
+
+    local character = occupant.Parent
+    if not character or not character:IsA("Model") or not character.Parent then return false end
+
+    local hrp = character:FindFirstChild("HumanoidRootPart")
+    if not hrp then return false end
+
+    local okPos, dist = pcall(function() return (hrp.Position - seat.Position).Magnitude end)
+    if not okPos or dist > CONFIG.GhostDistance then return false end
+
+    local plr = Players:GetPlayerFromCharacter(character)
+    if plr and not plr.Parent then return false end
+    return true
+end
+
+local function IsSeatAvailable(seat)
+    if not seat or not seat.Parent or not seat:IsA("Seat") then return false end
+    local _, hum = GetCharParts()
+    if hum and seat.Occupant == hum then return true end
+    local occupant = seat.Occupant
+    if not occupant then return true end
+    if IsOccupantReal(seat, occupant) then return false end
+
+    if not STATE.ghostSeen[seat] then
+        STATE.ghostSeen[seat] = true
+        print(string.format("[PARK] Kursi '%s' punya occupant hantu (%s) - dianggap bebas.", tostring(seat.Name), tostring(occupant.Name)))
+    end
+    return true
+end
+
+local function IsSeatUsable(seat) return IsSeatAvailable(seat) and not IsSeatBlacklisted(seat) end
+
+---------------------------------------------------------------
+-- UI
+---------------------------------------------------------------
+local oldGui = PlayerGui:FindFirstChild("TradeTesterGUI")
+if oldGui then oldGui:Destroy() end
+
+local screenGui = Create("ScreenGui", { Name = "TradeTesterGUI", ResetOnSpawn = false, DisplayOrder = 50, Parent = PlayerGui })
+local main = Create("Frame", { Name = "Main", Size = UDim2.new(0, 250, 0, 400), Position = UDim2.new(0, 20, 0.5, -200), BackgroundColor3 = Color3.fromRGB(24, 24, 30), BorderSizePixel = 0, Parent = screenGui })
+Create("UICorner", { CornerRadius = UDim.new(0, 8), Parent = main })
+Create("UIStroke", { Thickness = 1, Color = Color3.fromRGB(60, 60, 75), Parent = main })
+
+local titleBar = Create("Frame", { Size = UDim2.new(1, 0, 0, 30), BackgroundColor3 = Color3.fromRGB(36, 36, 46), BorderSizePixel = 0, Parent = main })
+Create("UICorner", { CornerRadius = UDim.new(0, 8), Parent = titleBar })
+Create("Frame", { Size = UDim2.new(1, 0, 0, 10), Position = UDim2.new(0, 0, 1, -10), BackgroundColor3 = Color3.fromRGB(36, 36, 46), BorderSizePixel = 0, Parent = titleBar })
+Create("TextLabel", { BackgroundTransparency = 1, Position = UDim2.new(0, 10, 0, 0), Size = UDim2.new(1, -40, 1, 0), Font = Enum.Font.GothamBold, TextSize = 13, TextColor3 = Color3.fromRGB(255, 255, 255), TextXAlignment = Enum.TextXAlignment.Left, Text = "Trade Parking (rev.7)", Parent = titleBar })
+
+local minBtn = Create("TextButton", { Size = UDim2.new(0, 22, 0, 20), Position = UDim2.new(1, -28, 0, 5), BackgroundColor3 = Color3.fromRGB(70, 70, 85), BorderSizePixel = 0, Font = Enum.Font.GothamBold, TextSize = 13, TextColor3 = Color3.fromRGB(255, 255, 255), Text = "-", Parent = titleBar })
+Create("UICorner", { CornerRadius = UDim.new(0, 4), Parent = minBtn })
+
+local openBtn = Create("TextButton", { Name = "OpenBtn", Size = UDim2.new(0, 40, 0, 30), Position = UDim2.new(0, 20, 0.5, -15), BackgroundColor3 = Color3.fromRGB(36, 36, 46), BorderSizePixel = 0, Font = Enum.Font.GothamBold, TextSize = 14, TextColor3 = Color3.fromRGB(255, 255, 255), Text = "TP", Visible = false, Parent = screenGui })
+Create("UICorner", { CornerRadius = UDim.new(0, 6), Parent = openBtn })
+
+local nameBox = Create("TextBox", { Position = UDim2.new(0, 10, 0, 40), Size = UDim2.new(0, 150, 0, 30), BackgroundColor3 = Color3.fromRGB(42, 42, 52), BorderSizePixel = 0, Font = Enum.Font.Gotham, TextSize = 12, TextColor3 = Color3.fromRGB(255, 255, 255), PlaceholderText = "Nama target / pilih...", Text = "", ClearTextOnFocus = false, Parent = main })
+Create("UICorner", { CornerRadius = UDim.new(0, 6), Parent = nameBox })
+
+local setBtn = Create("TextButton", { Position = UDim2.new(0, 168, 0, 40), Size = UDim2.new(0, 72, 0, 30), BackgroundColor3 = Color3.fromRGB(60, 120, 200), BorderSizePixel = 0, Font = Enum.Font.GothamBold, TextSize = 12, TextColor3 = Color3.fromRGB(255, 255, 255), Text = "Set Nama", Parent = main })
+Create("UICorner", { CornerRadius = UDim.new(0, 6), Parent = setBtn })
+
+Create("TextLabel", { Position = UDim2.new(0, 10, 0, 75), Size = UDim2.new(1, -20, 0, 14), BackgroundTransparency = 1, Font = Enum.Font.GothamMedium, TextSize = 11, TextColor3 = Color3.fromRGB(170, 170, 180), TextXAlignment = Enum.TextXAlignment.Left, Text = "Pilih dari server (klik nama):", Parent = main })
+
+local scrollFrame = Create("ScrollingFrame", { Position = UDim2.new(0, 10, 0, 92), Size = UDim2.new(1, -20, 0, 110), BackgroundColor3 = Color3.fromRGB(36, 36, 46), BorderSizePixel = 0, ScrollBarThickness = 4, CanvasSize = UDim2.new(0, 0, 0, 0), AutomaticCanvasSize = Enum.AutomaticSize.Y, ScrollingDirection = Enum.ScrollingDirection.Y, Parent = main })
+Create("UICorner", { CornerRadius = UDim.new(0, 6), Parent = scrollFrame })
+Create("UIListLayout", { Padding = UDim.new(0, 3), Parent = scrollFrame })
+Create("UIPadding", { PaddingLeft = UDim.new(0, 3), PaddingRight = UDim.new(0, 3), PaddingTop = UDim.new(0, 3), Parent = scrollFrame })
+
+local refreshBtn = Create("TextButton", { Position = UDim2.new(0, 10, 0, 210), Size = UDim2.new(0, 100, 0, 24), BackgroundColor3 = Color3.fromRGB(95, 95, 110), BorderSizePixel = 0, Font = Enum.Font.GothamBold, TextSize = 11, TextColor3 = Color3.fromRGB(255, 255, 255), Text = "Refresh List", Parent = main })
+Create("UICorner", { CornerRadius = UDim.new(0, 6), Parent = refreshBtn })
+
+local pinBtn = Create("TextButton", { Position = UDim2.new(0, 115, 0, 210), Size = UDim2.new(0, 125, 0, 24), BackgroundColor3 = Color3.fromRGB(150, 110, 40), BorderSizePixel = 0, Font = Enum.Font.GothamBold, TextSize = 11, TextColor3 = Color3.fromRGB(255, 255, 255), Text = "Pin Kursi", Parent = main })
+Create("UICorner", { CornerRadius = UDim.new(0, 6), Parent = pinBtn })
+
+local seatLabel = Create("TextLabel", { Position = UDim2.new(0, 10, 0, 238), Size = UDim2.new(1, -20, 0, 14), BackgroundTransparency = 1, Font = Enum.Font.GothamMedium, TextSize = 10, TextColor3 = Color3.fromRGB(150, 150, 165), TextXAlignment = Enum.TextXAlignment.Left, Text = "Kursi: -", Parent = main })
+
+local toggleBtn = Create("TextButton", { Position = UDim2.new(0, 10, 0, 258), Size = UDim2.new(1, -20, 0, 36), BackgroundColor3 = Color3.fromRGB(200, 60, 60), BorderSizePixel = 0, Font = Enum.Font.GothamBold, TextSize = 14, TextColor3 = Color3.fromRGB(255, 255, 255), Text = "START PARKIR", Parent = main })
+Create("UICorner", { CornerRadius = UDim.new(0, 6), Parent = toggleBtn })
+
+local statusLabel = Create("TextLabel", { Position = UDim2.new(0, 10, 0, 298), Size = UDim2.new(1, -20, 0, 40), BackgroundTransparency = 1, Font = Enum.Font.GothamMedium, TextSize = 11, TextColor3 = COL.idle, TextWrapped = true, TextXAlignment = Enum.TextXAlignment.Left, TextYAlignment = Enum.TextYAlignment.Top, Text = "Status: menunggu start...", Parent = main })
+
+local counterLabel = Create("TextLabel", { Position = UDim2.new(0, 10, 0, 342), Size = UDim2.new(1, -20, 0, 48), BackgroundTransparency = 1, Font = Enum.Font.Gotham, TextSize = 10, TextColor3 = Color3.fromRGB(140, 140, 155), TextWrapped = true, TextXAlignment = Enum.TextXAlignment.Left, TextYAlignment = Enum.TextYAlignment.Top, Text = "Target: -", Parent = main })
+
+local function SetStatus(text, color)
+    statusLabel.Text = "Status: " .. tostring(text)
+    statusLabel.TextColor3 = color or COL.idle
+end
+
+local function UpdateCounters()
+    counterLabel.Text = string.format("Target: %s\nSalah orang: %d | Gagal duduk: %d", (STATE.target ~= "" and STATE.target or "-"), STATE.wrongCount, STATE.sitFails)
+end
+
+local function UpdateSeatLabel()
+    local text = "-"
+    if STATE.pinSeat and STATE.pinSeat.Parent then text = "pin: " .. tostring(STATE.pinSeat.Name)
+    elseif STATE.seat and STATE.seat.Parent then text = (STATE.seatArea and STATE.seatArea.Short or "?") .. " / " .. tostring(STATE.seat.Name) end
+    if #text > 26 then text = string.sub(text, 1, 26) .. "..." end
+    seatLabel.Text = "Kursi: " .. text
+end
+
+local function UpdateToggle()
+    if STATE.running then
+        toggleBtn.Text = "STOP PARKIR"
+        toggleBtn.BackgroundColor3 = Color3.fromRGB(60, 180, 80)
+    else
+        toggleBtn.Text = "START PARKIR"
+        toggleBtn.BackgroundColor3 = Color3.fromRGB(200, 60, 60)
+    end
+end
+
+local function RefreshPlayerList()
+    for _, child in ipairs(scrollFrame:GetChildren()) do if child:IsA("TextButton") then child:Destroy() end end
+    for _, plr in ipairs(Players:GetPlayers()) do
+        if plr ~= LocalPlayer then
+            local isTarget = (plr.Name == STATE.target)
+            local btn = Create("TextButton", { Size = UDim2.new(1, 0, 0, 24), BackgroundColor3 = isTarget and Color3.fromRGB(45, 110, 70) or Color3.fromRGB(52, 52, 66), BorderSizePixel = 0, Font = Enum.Font.Gotham, TextSize = 11, TextColor3 = Color3.fromRGB(255, 255, 255), TextXAlignment = Enum.TextXAlignment.Left, Text = "  " .. plr.Name, Parent = scrollFrame })
+            Create("UICorner", { CornerRadius = UDim.new(0, 4), Parent = btn })
+            btn.MouseButton1Click:Connect(function()
+                STATE.target = plr.Name
+                nameBox.Text = plr.Name
+                SetStatus("Target diset: " .. plr.Name, COL.idle)
+                UpdateCounters()
+                RefreshPlayerList()
+            end)
+        end
+    end
+end
+
+local refreshQueued = false
+local function QueueRefresh()
+    if refreshQueued then return end
+    refreshQueued = true
+    task.delay(0.4, function() refreshQueued = false if STATE.alive then RefreshPlayerList() end end)
+end
+
+---------------------------------------------------------------
+-- AUTO SEAT
+---------------------------------------------------------------
+local fullScanUsed = {}
+local function QueryPartsNear(center, radius)
+    local params = OverlapParams.new()
+    params.FilterType = Enum.RaycastFilterType.Include
+    params.FilterDescendantsInstances = { workspace }
+    params.MaxParts = 512
+    local ok, parts = pcall(function() return workspace:GetPartBoundsInRadius(center, radius, params) end)
+    if not ok or type(parts) ~= "table" then return {} end
+    return parts
+end
+
+local function AddTag(inst) if not inst then return end local ok, has = pcall(function() return CollectionService:HasTag(inst, SEAT_TAG) end) if ok and has then return end pcall(function() CollectionService:AddTag(inst, SEAT_TAG) end) end
+local function RemoveTag(inst) if not inst then return end local ok, has = pcall(function() return CollectionService:HasTag(inst, SEAT_TAG) end) if not ok or not has then return end pcall(function() CollectionService:RemoveTag(inst, SEAT_TAG) end) end
+
+local function CollectAreaTables(area)
+    local tables, seen = {}, {}
+    for _, inst in ipairs(QueryPartsNear(area.Center, area.Radius + CONFIG.TableRadius)) do
+        if inst:IsA("BasePart") and not seen[inst] and NameMatch(inst, TABLE_HINTS) then seen[inst] = true tables[#tables + 1] = inst end
+    end
+    return tables
+end
+
+local function EvaluateSeat(seat, area, tables)
+    if not seat or not seat.Parent or not seat:IsA("Seat") then return nil, nil, "bukan kursi" end
+    local anchorDist = (seat.Position - area.Center).Magnitude
+    if anchorDist > area.Radius then return nil, nil, "luar area" end
+    local tableDist = nil
+    for _, tpart in ipairs(tables) do
+        if tpart ~= seat then
+            local d = (tpart.Position - seat.Position).Magnitude
+            if not tableDist or d < tableDist then tableDist = d end
+        end
+    end
+    local nearTable = (tableDist ~= nil) and (tableDist <= CONFIG.TableRadius) or false
+    local hasTable = (#tables > 0)
+    local seatNameOk = NameMatch(seat, SEAT_HINTS)
+    local tradeName = NameHas(seat.Name, { "trade" })
+    if hasTable and not nearTable then return nil, nil, "jauh dari meja" end
+    if not hasTable and not seatNameOk then return nil, nil, "nama kursi tidak cocok" end
+    local score = anchorDist
+    if tableDist then score = score + tableDist * 2 end
+    if nearTable then score = score - 2 end
+    if seatNameOk then score = score - 1 end
+    if tradeName then score = score - 6 end
+    return score, { anchorDist = anchorDist, tableDist = tableDist, nearTable = nearTable, seatNameOk = seatNameOk, tradeName = tradeName }
+end
+
+local function AddCandidate(list, seen, inst)
+    if not inst or seen[inst] then return end
+    if not inst:IsA("Seat") or not inst.Parent then return end
+    seen[inst] = true
+    list[#list + 1] = inst
+end
+
+local function CollectSeatCandidates(area)
+    local list, seen = {}, {}
+    for _, seat in ipairs(CollectionService:GetTagged(SEAT_TAG)) do AddCandidate(list, seen, seat) end
+    for _, inst in ipairs(QueryPartsNear(area.Center, area.Radius)) do AddCandidate(list, seen, inst) end
+    if #list == 0 and not fullScanUsed[area.Name] then
+        fullScanUsed[area.Name] = true
+        for _, inst in ipairs(workspace:GetDescendants()) do AddCandidate(list, seen, inst) end
+    end
+    return list
+end
+
+local function FindSeatInArea(area)
+    for seat, untilTime in pairs(STATE.seatBlock) do
+        if not seat.Parent or os.clock() >= untilTime then STATE.seatBlock[seat] = nil end
+    end
+    local tables = CollectAreaTables(area)
+    local candidates = CollectSeatCandidates(area)
+    local best, bestScore, bestInfo = nil, nil, nil
+    local rejectedNear, occupied, blocked = 0, 0, 0
+    for _, seat in ipairs(candidates) do
+        local score, info, reason = EvaluateSeat(seat, area, tables)
+        if score then
+            if IsSeatBlacklisted(seat) then blocked = blocked + 1
+            elseif not IsSeatAvailable(seat) then occupied = occupied + 1
+            elseif not bestScore or score < bestScore then best, bestScore, bestInfo = seat, score, info end
+        else
+            if reason ~= "luar area" then rejectedNear = rejectedNear + 1 RemoveTag(seat) end
+        end
+    end
+    if best then AddTag(best) end
+    return best, bestInfo, rejectedNear, occupied, blocked, #tables
+end
+
+local function GetNearestArea(pos)
+    local best, bestDist = nil, nil
+    for _, area in ipairs(CONFIG.Areas) do
+        local d = (area.Center - pos).Magnitude
+        if not bestDist or d < bestDist then best, bestDist = area, d end
+    end
+    return best, bestDist
+end
+
+local function EnsureSeat(hrp)
+    local area, areaDist = GetNearestArea(hrp.Position)
+    if not area then return nil, "Area kursi belum dikonfigurasi" end
+    if areaDist > CONFIG.MaxSeatDist then return nil, string.format("Terlalu jauh dari area (%s, %.0f studs) - salah sea?", area.Name, areaDist) end
+    local _, hum = GetCharParts()
+    local sitting = hum and hum.SeatPart
+    if sitting and sitting:IsA("Seat") and (sitting.Position - area.Center).Magnitude <= area.Radius then
+        STATE.seat, STATE.seatArea = sitting, area
+        return sitting, nil, area
+    end
+    local pin = STATE.pinSeat
+    if pin and pin.Parent and pin:IsA("Seat") and IsSeatUsable(pin) then
+        local pinArea = GetNearestArea(pin.Position)
+        if pinArea == area then STATE.seat, STATE.seatArea = pin, area return pin, nil, area end
+    end
+    local cached = STATE.seat
+    if cached and cached.Parent and STATE.seatArea == area and IsSeatUsable(cached) then return cached, nil, area end
+    local found, info, rejectedNear, occupied, blocked, tableCount = FindSeatInArea(area)
+    if not found then
+        STATE.seat, STATE.seatArea = nil, nil
+        UpdateSeatLabel()
+        local parts = {}
+        if occupied > 0 then parts[#parts + 1] = string.format("%d kursi dipakai orang", occupied) end
+        if blocked > 0 then parts[#parts + 1] = string.format("%d kursi diblokir sementara", blocked) end
+        if rejectedNear > 0 then parts[#parts + 1] = string.format("%d kursi bukan kursi trade", rejectedNear) end
+        if tableCount == 0 then parts[#parts + 1] = "meja trade tidak terdeteksi" end
+        local extra = (#parts > 0) and (" (" .. table.concat(parts, ", ") .. ")") or ""
+        return nil, string.format("Kursi trade tidak bisa dipakai di %s%s. Duduk manual lalu klik 'Pin Kursi'.", area.Name, extra)
+    end
+    STATE.seat, STATE.seatArea = found, area
+    UpdateSeatLabel()
+    print(string.format("[PARK] Kursi dipakai: %s | area=%s | jarak anchor=%.1f stud%s", found:GetFullName(), area.Short, info and info.anchorDist or -1, (info and info.tableDist) and string.format(" | ke meja=%.1f", info.tableDist) or " | meja tidak terdeteksi"))
+    return found, nil, area
+end
+
+---------------------------------------------------------------
+-- TRAVEL
+---------------------------------------------------------------
+local function DestroyMover(mv)
+    if not mv then return end
+    if mv.mover then
+        pcall(function() mv.mover.Velocity = Vector3.zero end)
+        pcall(function() mv.mover:Destroy() end)
+    end
+    if mv.attachment then pcall(function() mv.attachment:Destroy() end) end
+    mv.mover, mv.attachment = nil, nil
+end
+
+local function CreateMover(hrp)
+    local attachment, mover = nil, nil
+    local ok = pcall(function()
+        attachment = Instance.new("Attachment")
+        attachment.Name = "BloxParkMove"
+        attachment.Parent = hrp
+        mover = Instance.new("LinearVelocity")
+        mover.Name = "BloxParkVelocity"
+        mover.Attachment0 = attachment
+        mover.RelativeTo = Enum.ActuatorRelativeTo.World
+        mover.MaxForce = math.huge
+        mover.Velocity = Vector3.zero
+        mover.Parent = hrp
+    end)
+    if ok and mover then return mover, attachment end
+    if attachment then pcall(function() attachment:Destroy() end) end
+    local okBV = pcall(function()
+        mover = Instance.new("BodyVelocity")
+        mover.Name = "BloxParkVelocity"
+        mover.MaxForce = Vector3.new(1000000, 1000000, 1000000)
+        mover.Velocity = Vector3.zero
+        mover.Parent = hrp
+    end)
+    if okBV and mover then return mover, nil end
+    return nil
+end
+
+local function FinishTravel(arrived)
+    local mv = STATE.move
+    STATE.move = nil
+    STATE.traveling = false
+    if not mv then return nil, nil end
+    local _, _, hrp = GetCharParts()
+    if hrp then
+        pcall(function() hrp.AssemblyLinearVelocity = Vector3.zero end)
+        pcall(function() hrp.AssemblyAngularVelocity = Vector3.zero end)
+    end
+    DestroyMover(mv)
+    if arrived then return mv.seat, mv.area end
+    return nil, nil
+end
+
+local function CancelTravel() FinishTravel(false) end
+
+local function StartTravel(hrp, seat, area, dist)
+    CancelTravel()
+    local mover, attachment = CreateMover(hrp)
+    if not mover then
+        pcall(function() hrp.CFrame = CFrame.new(seat.Position) end)
+        return false
+    end
+    STATE.move = { target = seat.Position, seat = seat, area = area, mover = mover, attachment = attachment, speed = CONFIG.TravelSpeed, deadline = os.clock() + CONFIG.MaxTravelTime }
+    STATE.traveling = true
+    STATE.seat, STATE.seatArea = seat, area
+    if not STATE.tradeOpen then SetStatus(string.format("Menuju kursi %s (%.0f studs)...", area.Name, dist), COL.idle) end
+    return true
+end
+
+local function StepTravel(hrp)
+    local mv = STATE.move
+    if not mv then return false end
+    if not STATE.alive or not STATE.running then CancelTravel() return false end
+    if os.clock() > mv.deadline then FinishTravel(false) return false end
+    if not mv.mover or not mv.mover.Parent then FinishTravel(false) return false end
+    local delta = mv.target - hrp.Position
+    local dist = delta.Magnitude
+    if dist <= CONFIG.ArriveDist then return true end
+    local speed = math.min(mv.speed, dist / CONFIG.TravelStep)
+    local ok = pcall(function() mv.mover.Velocity = delta.Unit * speed end)
+    if not ok then FinishTravel(false) return false end
+    return false
+end
+
+local function SitOnSeat(seat, hum, hrp)
+    if hum.SeatPart == seat then return true end
+    if not seat or not seat.Parent or not seat:IsA("Seat") then return false, "kursi hilang" end
+    if not IsSeatAvailable(seat) then return false, "kursi sudah dipakai orang lain" end
+    local ok = pcall(function() seat:Sit(hum) end)
+    if not ok then pcall(function() hum.Sit = true end) end
+    local t0 = os.clock()
+    while (os.clock() - t0) < CONFIG.ClaimTimeout do
+        if not STATE.alive then return false, "script di-unload" end
+        if not STATE.running then return false, "parkir dihentikan" end
+        if hum.SeatPart == seat then STATE.sitFails = 0 ClearSeatBlock(seat) return true end
+        task.wait(0.1)
+    end
+    return false, "gagal duduk (kursi di-claim server)"
+end
+
+local function GoToSeat(force)
+    if not STATE.running then return false end
+    if STATE.tradeOpen then return false end
+    local char, hum, hrp = GetCharParts()
+    if not char then return false end
+    if STATE.move then return false end
+    if STATE.resetting and not force then return false end
+    local seat, err, area = EnsureSeat(hrp)
+    if not seat then
+        if err and (os.clock() - STATE.lastSeatTry) > CONFIG.SeatRetry then STATE.lastSeatTry = os.clock() SetStatus(err, COL.warn) end
+        return false
+    end
+    if hum.SeatPart == seat then
+        if not STATE.tradeOpen then SetStatus("Parkir di " .. area.Name .. " - menunggu trade...", COL.idle) end
+        return true
+    end
+    local dist = (hrp.Position - seat.Position).Magnitude
+    if dist > CONFIG.SitReach then
+        if StartTravel(hrp, seat, area, dist) then return false end
+    end
+    local ok, why = SitOnSeat(seat, hum, hrp)
+    if ok then SetStatus("Duduk di " .. area.Name .. " - menunggu trade...", COL.idle) return true end
+    if why == "parkir dihentikan" or why == "script di-unload" then return false end
+    STATE.sitFails = STATE.sitFails + 1
+    UpdateCounters()
+    if why == "gagal duduk (kursi di-claim server)" then BlacklistSeat(seat, why) end
+    SetStatus("Gagal duduk: " .. tostring(why), COL.warn)
+    STATE.seat = nil
+    UpdateSeatLabel()
+    return false
+end
+
+---------------------------------------------------------------
+-- UI TRADE
+---------------------------------------------------------------
+local TRADE_NAMES = { Trade = true, TradeFrame = true, TradeGui = true, TradeGUI = true, TradeWindow = true }
+local function IsTradeUiCandidate(inst)
+    if not inst or not inst.Parent then return false end
+    local okClass, className = pcall(function() return inst.ClassName end)
+    if okClass and className == "ScreenGui" then return true end
+    local okGui, isGui = pcall(function() return inst:IsA("GuiObject") end)
+    return okGui and isGui == true
+end
+local function UiArea(inst) local ok, size = pcall(function() return inst.AbsoluteSize end) if ok and size and size.X and size.Y then return size.X * size.Y end return 0 end
+local function IsShown(inst)
+    if inst.ClassName == "ScreenGui" then local ok, enabled = pcall(function() return inst.Enabled end) return (not ok) or enabled ~= false end
+    if inst:IsA("GuiObject") then local ok, visible = pcall(function() return inst.Visible end) return ok and visible ~= false end
+    return false
+end
+local function FindTradeUi(force)
+    local cached = STATE.tradeUi
+    if cached then if IsTradeUiCandidate(cached) then return cached end STATE.tradeUi = nil end
+    local now = os.clock()
+    if not force and (now - STATE.lastUiScan) < CONFIG.UiScanInterval then return nil end
+    STATE.lastUiScan = now
+    local mainGui = PlayerGui:FindFirstChild("Main")
+    if not mainGui then return nil end
+    local best, bestArea = nil, -1
+    for _, inst in ipairs(mainGui:GetDescendants()) do
+        if TRADE_NAMES[inst.Name] and IsTradeUiCandidate(inst) then
+            local area = UiArea(inst)
+            if area > bestArea then best, bestArea = inst, area end
+        end
+    end
+    STATE.tradeUi = best
+    return best
+end
+local function AncestorsVisible(inst)
+    local cur = inst
+    while cur and cur ~= PlayerGui do
+        if cur:IsA("GuiObject") then local ok, visible = pcall(function() return cur.Visible end) if ok and visible == false then return false end end
+        cur = cur.Parent
+    end
+    return true
+end
+local function IsTradeOpen(ui)
+    if not IsTradeUiCandidate(ui) then return false end
+    if not IsShown(ui) then return false end
+    if not AncestorsVisible(ui) then return false end
+    if ui:IsA("GuiObject") then return UiArea(ui) > 0 end
+    return true
+end
+local function BuildNameMap()
+    local map = {}
+    for _, plr in ipairs(Players:GetPlayers()) do
+        if plr ~= LocalPlayer then
+            map[plr.Name] = plr.Name
+            local dn = plr.DisplayName
+            if dn and dn ~= "" and dn ~= plr.Name then map[dn] = plr.Name end
+        end
+    end
+    return map
+end
+local nameMapCache = nil
+local nameMapAt = 0
+local function GetNameMap()
+    local now = os.clock()
+    if not nameMapCache or (now - nameMapAt) > 1.0 then nameMapCache, nameMapAt = BuildNameMap(), now end
+    return nameMapCache
+end
+local function InvalidateNameMap() nameMapCache = nil nameMapAt = 0 end
+local function GetPartnerFromUi(ui, nameMap)
+    local texts = {}
+    for _, descendant in ipairs(ui:GetDescendants()) do
+        if descendant:IsA("TextLabel") or descendant:IsA("TextButton") or descendant:IsA("TextBox") then
+            local txt = descendant.Text
+            if type(txt) == "string" and txt ~= "" then
+                local canon = nameMap[txt]
+                if canon then return canon end
+                texts[#texts + 1] = txt
+            end
+        end
+    end
+    for _, txt in ipairs(texts) do
+        for key, canon in pairs(nameMap) do if #key >= 3 and string.find(txt, key, 1, true) then return canon end end
+    end
+    return nil
+end
+local function GetNearestPlayer(maxDist, myPos)
+    local best, bestDist = nil, maxDist
+    for _, plr in ipairs(Players:GetPlayers()) do
+        if plr ~= LocalPlayer and plr.Character then
+            local hrp = plr.Character:FindFirstChild("HumanoidRootPart")
+            if hrp then
+                local d = (hrp.Position - myPos).Magnitude
+                if d < bestDist then best, bestDist = plr.Name, d end
+            end
+        end
+    end
+    return best, bestDist
+end
+
+---------------------------------------------------------------
+-- AUTO KICK
+---------------------------------------------------------------
+local DECLINE_NAMES = { Decline = true, Declined = true, Cancel = true, CancelButton = true, Close = true, CloseButton = true, Exit = true, X = true }
+local function TryPressDecline(ui)
+    if type(firesignal) ~= "function" then return false end
+    if not IsTradeUiCandidate(ui) then return false end
+    for _, descendant in ipairs(ui:GetDescendants()) do
+        if descendant:IsA("GuiButton") and DECLINE_NAMES[descendant.Name] then
+            local ok = pcall(function() firesignal(descendant.MouseButton1Click) end)
+            if ok then return true end
+        end
+    end
+    return false
+end
+local function KickWrongTrader(partner)
+    if STATE.resetting then return end
+    if (os.clock() - STATE.lastKick) < CONFIG.KickCooldown then return end
+    local _, hum = GetCharParts()
+    if not hum then return end
+    STATE.lastKick = os.clock()
+    STATE.resetting = true
+    STATE.wrongCount = STATE.wrongCount + 1
+    UpdateCounters()
+    SetStatus(string.format("Salah orang (%s) - mengusir...", tostring(partner or "?")), COL.bad)
+    print(string.format("[PARK] Salah trader: %s (usir #%d)", tostring(partner), STATE.wrongCount))
+    local ui = FindTradeUi()
+    if ui then TryPressDecline(ui) end
+    CancelTravel()
+    pcall(function() hum.Sit = false end)
+    pcall(function() hum:ChangeState(Enum.HumanoidStateType.GettingUp) end)
+    local t0 = os.clock()
+    while (os.clock() - t0) < 1.0 do if hum.SeatPart == nil and not hum.Sit then break end task.wait(0.05) end
+    if hum.SeatPart ~= nil then pcall(function() hum.Jump = true end) task.wait(0.25) end
+    task.wait(CONFIG.KickGrace)
+    STATE.resetting = false
+    if STATE.alive and STATE.running then
+        STATE.tradeOpen = IsTradeOpen(FindTradeUi(true))
+        if not GoToSeat(true) and not STATE.move then SetStatus("Gagal kembali ke kursi - dicoba lagi...", COL.warn) end
+    end
+    UpdateCounters()
+end
+
+---------------------------------------------------------------
+-- LOOP UTAMA
+---------------------------------------------------------------
+local function SitAfterTravel(seat, area, hum, hrp)
+    if not (seat and seat.Parent) then return false end
+    if CONFIG.SettleTime > 0 then task.wait(CONFIG.SettleTime) end
+    local ok, why = SitOnSeat(seat, hum, hrp)
+    if ok then SetStatus("Duduk di " .. ((area and area.Name) or "kursi") .. " - menunggu trade...", COL.idle) return true end
+    if why == "parkir dihentikan" or why == "script di-unload" then return false end
+    STATE.sitFails = STATE.sitFails + 1
+    UpdateCounters()
+    if why == "gagal duduk (kursi di-claim server)" then BlacklistSeat(seat, why) end
+    SetStatus("Gagal duduk: " .. tostring(why), COL.warn)
+    STATE.seat = nil
+    UpdateSeatLabel()
+    return false
+end
+
+local function Tick()
+    if not STATE.running then return CONFIG.PollIdle end
+    if STATE.resetting then return 0.1 end
+    local _, hum, hrp = GetCharParts()
+    if not hum then CancelTravel() return 0.5 end
+    local ui = FindTradeUi()
+    local open = IsTradeOpen(ui)
+    STATE.tradeOpen = open
+    if STATE.move then
+        if open then CancelTravel() SetStatus("Trade kebuka saat terbang - berhenti dulu.", COL.warn) return 0.1 end
+        if StepTravel(hrp) then
+            local seat, area = FinishTravel(true)
+            SitAfterTravel(seat, area, hum, hrp)
+        else return CONFIG.TravelStep end
+    end
+    if not hum.SeatPart and not open then if not GoToSeat(false) then return CONFIG.PollIdle end end
+    if not open then return CONFIG.PollIdle end
+    local partner = GetPartnerFromUi(ui, GetNameMap())
+    if not partner then partner = GetNearestPlayer(CONFIG.PartnerRadius, hrp.Position) end
+    if partner then
+        if partner ~= STATE.target then KickWrongTrader(partner) return 0.1 end
+        SetStatus(string.format("Target datang (%s) - silakan trade!", partner), COL.good)
+    else SetStatus("Trade terbuka, partner belum terdeteksi...", COL.warn) end
+    return CONFIG.PollTrade
+end
+
+---------------------------------------------------------------
+-- PIN KURSI MANUAL
+---------------------------------------------------------------
+local function SavePinToFile(seat)
+    if type(writefile) ~= "function" then return end
+    local data = string.format("%.3f,%.3f,%.3f", seat.Position.X, seat.Position.Y, seat.Position.Z)
+    local ok = pcall(function() writefile(PIN_FILE, data) end)
+    if not ok then print("[PARK] Gagal menyimpan pin ke file.") end
+end
+local function LoadPinFromFile()
+    if type(readfile) ~= "function" or type(isfile) ~= "function" then return nil end
+    local okFile, exists = pcall(isfile, PIN_FILE)
+    if not okFile or not exists then return nil end
+    local okRead, data = pcall(readfile, PIN_FILE)
+    if not okRead or type(data) ~= "string" or data == "" then return nil end
+    local x, y, z = string.match(data, "([^,]+),([^,]+),([^,]+)")
+    local px, py, pz = tonumber(x), tonumber(y), tonumber(z)
+    if not (px and py and pz) then return nil end
+    local targetPos = Vector3.new(px, py, pz)
+    local best, bestDist = nil, nil
+    for _, inst in ipairs(QueryPartsNear(targetPos, 6)) do
+        if inst:IsA("Seat") and inst.Parent then
+            local d = (inst.Position - targetPos).Magnitude
+            if not bestDist or d < bestDist then best, bestDist = inst, d end
+        end
+    end
+    if best then print(string.format("[PARK] Pin dimuat: %s (%.1f stud dari posisi tersimpan)", best:GetFullName(), bestDist)) end
+    return best
+end
+local function PinCurrentSeat()
+    local char, hum, hrp = GetCharParts()
+    if not char then SetStatus("Karakter belum siap - coba lagi.", COL.warn) return end
+    local seat = hum.SeatPart
+    if not (seat and seat:IsA("Seat")) then
+        local best, bestDist = nil, nil
+        for _, inst in ipairs(QueryPartsNear(hrp.Position, 14)) do
+            if inst:IsA("Seat") then
+                local d = (inst.Position - hrp.Position).Magnitude
+                if not bestDist or d < bestDist then best, bestDist = inst, d end
+            end
+        end
+        seat = best
+    end
+    if not seat then SetStatus("Tidak ada kursi di dekatmu. Duduk di kursi trade dulu, lalu klik Pin.", COL.warn) return end
+    STATE.pinSeat = seat
+    STATE.seat = seat
+    STATE.seatArea = GetNearestArea(seat.Position)
+    AddTag(seat)
+    SavePinToFile(seat)
+    UpdateSeatLabel()
+    SetStatus("Kursi di-pin: " .. tostring(seat.Name) .. " (disimpan)", COL.good)
+    print(string.format("[PARK] PIN kursi: %s @ %.1f, %.1f, %.1f", seat:GetFullName(), seat.Position.X, seat.Position.Y, seat.Position.Z))
+end
+
+---------------------------------------------------------------
+-- UNLOAD & EVENT
+---------------------------------------------------------------
+local function Unload()
+    STATE.alive = false
+    STATE.running = false
+    CancelTravel()
+    for _, conn in ipairs(STATE.conns) do pcall(function() conn:Disconnect() end) end
+    STATE.conns = {}
+    local _, hum = GetCharParts()
+    if hum then pcall(function() hum.Sit = false end) end
+    if screenGui then pcall(function() screenGui:Destroy() end) end
+    local env = (typeof(getgenv) == "function") and getgenv() or _G
+    if env.BloxParkAutoTrade and env.BloxParkAutoTrade.Unload == Unload then env.BloxParkAutoTrade = nil end
+    print("[PARK] Script di-unload.")
+end
+
+local env = (typeof(getgenv) == "function") and getgenv() or _G
+if type(env.BloxParkAutoTrade) == "table" and type(env.BloxParkAutoTrade.Unload) == "function" then pcall(env.BloxParkAutoTrade.Unload) end
+env.BloxParkAutoTrade = { Unload = Unload }
+
+Connect(Players.PlayerAdded, function() InvalidateNameMap() QueueRefresh() end)
+Connect(Players.PlayerRemoving, function(plr) InvalidateNameMap() QueueRefresh() if STATE.running and plr.Name == STATE.target then SetStatus("Target keluar dari server - ganti target.", COL.warn) end end)
+Connect(PlayerGui.DescendantAdded, function(inst) if TRADE_NAMES[inst.Name] then STATE.tradeUi = nil end end)
+Connect(PlayerGui.DescendantRemoving, function(inst) if inst == STATE.tradeUi or TRADE_NAMES[inst.Name] then STATE.tradeUi = nil end end)
+Connect(LocalPlayer.CharacterAdded, function(char)
+    CancelTravel()
+    STATE.seat, STATE.seatArea, STATE.tradeUi, STATE.resetting, STATE.sitFails = nil, nil, nil, false, 0
+    STATE.seatBlock, STATE.ghostSeen = {}, {}
+    InvalidateNameMap()
+    UpdateSeatLabel()
+    local hum = char:WaitForChild("Humanoid", 15)
+    if hum then Connect(hum.Died, function() STATE.running = false UpdateToggle() SetStatus("Karakter mati - parkir dihentikan.", COL.bad) end) end
+    if STATE.running then task.wait(1) if STATE.alive and STATE.running then GoToSeat(true) end end
+end)
+
+setBtn.MouseButton1Click:Connect(function()
+    local name = Trim(nameBox.Text)
+    if name == "" then SetStatus("Nama target masih kosong.", COL.warn) return end
+    STATE.target = name
+    SetStatus("Target diset: " .. name, COL.idle)
+    UpdateCounters()
+    RefreshPlayerList()
+end)
+
+refreshBtn.MouseButton1Click:Connect(function() RefreshPlayerList() SetStatus("List server di-refresh.", COL.idle) end)
+pinBtn.MouseButton1Click:Connect(function() PinCurrentSeat() end)
+toggleBtn.MouseButton1Click:Connect(function()
+    if not STATE.running then
+        local name = Trim(nameBox.Text)
+        if name == "" then SetStatus("Isi / pilih nama target dulu.", COL.warn) return end
+        if not Players:FindFirstChild(name) then SetStatus("'" .. name .. "' tidak ada di server ini.", COL.warn) return end
+        STATE.target = name
+        STATE.running = true
+        STATE.seat, STATE.seatArea, STATE.tradeUi = nil, nil, nil
+        STATE.lastKick, STATE.lastUiScan, STATE.wrongCount, STATE.sitFails, STATE.errCount = 0, 0, 0, 0, 0
+        UpdateCounters()
+        UpdateToggle()
+        SetStatus("Mencari kursi...", COL.idle)
+        task.spawn(function() if STATE.alive and STATE.running then GoToSeat(true) end end)
+    else
+        STATE.running = false
+        CancelTravel()
+        local _, hum = GetCharParts()
+        if hum then pcall(function() hum.Sit = false end) end
+        UpdateToggle()
+        SetStatus("Dihentikan.", COL.idle)
+    end
+end)
+
+minBtn.MouseButton1Click:Connect(function() main.Visible = false openBtn.Visible = true end)
+openBtn.MouseButton1Click:Connect(function() main.Visible = true openBtn.Visible = false end)
+
+local dragging, dragStart, startPos = false, nil, nil
+Connect(titleBar.InputBegan, function(input) if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then dragging = true dragStart = input.Position startPos = main.Position end end)
+Connect(UserInputService.InputChanged, function(input) if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then local delta = input.Position - dragStart main.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + delta.X, startPos.Y.Scale, startPos.Y.Offset + delta.Y) end end)
+Connect(UserInputService.InputEnded, function(input) if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then dragging = false end end)
+
+RefreshPlayerList()
+UpdateCounters()
+UpdateToggle()
+STATE.pinSeat = LoadPinFromFile()
+UpdateSeatLabel()
+if STATE.pinSeat then SetStatus("Siap. Pin kursi dimuat dari file.", COL.idle) else SetStatus("Siap. Pilih target lalu START.", COL.idle) end
+
+task.spawn(function()
+    while STATE.alive do
+        local waitTime = CONFIG.PollIdle
+        if STATE.running then
+            local ok, result = pcall(Tick)
+            if ok then
+                STATE.errCount = 0
+                waitTime = tonumber(result) or CONFIG.PollIdle
+            else
+                STATE.errCount = STATE.errCount + 1
+                warn("[PARK] " .. tostring(result))
+                SetStatus("Error: " .. tostring(result), COL.bad)
+                if STATE.errCount >= 5 then STATE.running = false UpdateToggle() SetStatus("Error berulang - parkir dihentikan.", COL.bad) end
+                waitTime = 1
+            end
+        end
+        task.wait(waitTime)
+    end
+end)
+
+print("[PARK] Auto Park Trade rev.7 siap. Unload: getgenv().BloxParkAutoTrade.Unload()")
