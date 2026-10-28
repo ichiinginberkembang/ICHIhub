@@ -1,778 +1,757 @@
--- ==========================================
--- 0. PENGATURAN GLOBAL & AUTO GROUP ID (v18)
--- ==========================================
-local LOCAL_UID       = game:GetService("Players").LocalPlayer.UserId
-local LEVEL_VXEZE_MIN = 2200        -- level >= ini: config Beli; di bawahnya: config Leveling
+--[[
+  BloxFactory v20  (Android + Delta Executor)
+  Layout: 0 Config | 1 Globals | 2 Core (Log/FS/Task) | 3 Webhook | 4 Group lock | 5 State store
+          6 Rotation + Session | 7 Dead-session detection | 8 Vxeze loader | 9 Notification filter
+          10 Input helpers | 11 Team | 12 Farm | 13 Gacha | 14 Sea guard | 15 Dashboard | 16 Watchdog | 17 Boot
 
--- ---------- AUTO GROUP_ID: slot lock per INSTANCE (token acak) ----------
-local MAX_GROUPS   = 20
-local LOCK_REFRESH = 10     
-local PROBE_WAIT   = 12     
-local LOCK_STALE   = 120    
-local LOCK_LOST    = false
+  INTERFACES READ BY THE EXTERNAL SCHEDULER (do not change):
+    * Signal file : "<username>_winterswap.json"   containing {"status":"done"}  (written at session end)
+    * Session file: "SessionEnd_<Group>_<UID>.txt" containing a Unix timestamp
+]]
 
-math.randomseed(math.floor(tick() * 1000) % 2147483647)
-local TOKEN = string.format("%08x%08x", math.random(0, 0x7fffffff), math.random(0, 0x7fffffff))
+----------------------------------------------------------------
+-- 0. CONFIG
+----------------------------------------------------------------
+local CFG = {
+    VERSION = "v20",
 
-local function LockFileName(n) return "Lock_" .. n .. ".txt" end
+    WEBHOOKS = { 
+        fruit = "https://discord.com/api/webhooks/1561728793226383510/PeYJqeHWViBXqs4M0VowG9xM-zk3Uupk2ta8UtWNUqh_R2IQaPIsxMIgZEXNnbRdJ2CM", 
+        report = "https://discord.com/api/webhooks/1564228949033222204/E2n26s5XvL45E4c6Ylnozwb3cyi03QOyinAcltbcrKyAjzj8bLCGMVeDo4IR3mSeOCwd" 
+    },
 
-local function LockRead(n)
-    local f = LockFileName(n)
-    if not isfile(f) then return nil end
-    local ok, data = pcall(readfile, f)
-    if not ok or type(data) ~= "string" then return nil end
-    local uid, token, seq, ts = string.match(data, "^(%d+)|(%x+)|(%d+)|(%d+)")
-    if not uid then return nil end
-    return { uid = uid, token = token, seq = tonumber(seq), ts = tonumber(ts) }
-end
+    VXEZE_URL       = "https://raw.githubusercontent.com/Dex-Bear/VxezeHubLoader/refs/heads/main/MainHub.lua",
+    LEVEL_VXEZE_MIN = 2200,
+    PREFERRED_TEAM  = "Pirates",
 
-local function AssignGroupNum()
-    if type(isfile) ~= "function" or type(readfile) ~= "function" or type(writefile) ~= "function" then
-        return 1, false
-    end
-    local me, now = tostring(LOCAL_UID), os.time()
-    local candidates, fresh = {}, {}
-    for n = 1, MAX_GROUPS do
-        local L = LockRead(n)
-        if not L or now - L.ts > LOCK_STALE then
-            candidates[#candidates + 1] = { n = n, mine = (L ~= nil and L.uid == me) }
-        else
-            fresh[#fresh + 1] = { n = n, seq = L.seq }
-        end
-    end
-    if #fresh > 0 then
-        task.wait(PROBE_WAIT)
-        for _, f in ipairs(fresh) do
-            local L = LockRead(f.n)
-            if not L or L.seq == f.seq then
-                candidates[#candidates + 1] = { n = f.n, mine = (L ~= nil and L.uid == me) }
-            end
-        end
-    end
-    table.sort(candidates, function(a, b)
-        if a.mine ~= b.mine then return a.mine end
-        return a.n < b.n
-    end)
-    for _, c in ipairs(candidates) do
-        pcall(writefile, LockFileName(c.n), me .. "|" .. TOKEN .. "|0|" .. os.time())
-        task.wait(math.random(10, 20) / 10)
-        local L = LockRead(c.n)
-        if L and L.token == TOKEN then return c.n, true end
-    end
-    return 1, false
-end
+    ROLL_INTERVAL = 7200,
+    ROLL_MARGIN   = 60,
+    LOW_BELI      = 5000000,
 
-local GROUP_NUM, LOCK_OK = AssignGroupNum()
-local GROUP_ID = "Group" .. GROUP_NUM
+    SESSION_BASE     = 960,
+    SESSION_MAX      = 2400,
+    SESSION_GRACE    = 180,
+    MIN_VALID_P      = 1200,
+    ROT_MAX_STEP     = 180,
+    SLACK_DECAY      = 1800,
+    BOOTSTRAP_CYCLES = 3,
+    RESIGNAL_AFTER   = 240,
+    START_MAX_WAIT   = 120,
+    GROUP_WAIT_MAX   = 25,
 
-if LOCK_OK then
-    task.spawn(function()
-        local seq = 0
-        while true do
-            task.wait(LOCK_REFRESH)
-            if not LOCK_LOST then
-                local L = LockRead(GROUP_NUM)
-                if L == nil or L.token == TOKEN then
-                    seq += 1
-                    pcall(writefile, LockFileName(GROUP_NUM), tostring(LOCAL_UID) .. "|" .. TOKEN .. "|" .. seq .. "|" .. os.time())
-                else
-                    LOCK_LOST = true
-                end
-            end
-        end
-    end)
-end
-print("[GroupID] akun " .. LOCAL_UID .. " -> " .. GROUP_ID .. (LOCK_OK and "" or " (TANPA LOCK)"))
+    DEAD_NO_CHAR = 240,
+    DEAD_ON_ERROR = true,
+    AUTO_REJOIN   = true,
+    REJOIN_AFTER  = 150,
 
--- ==========================================
--- 1. KONFIGURASI SCRIPT (VXEZE: LEVELING & BELI)
--- ==========================================
-local VXEZE_URL = "https://raw.githubusercontent.com/Dex-Bear/VxezeHubLoader/refs/heads/main/MainHub.lua"
+    FARM_STOP_BEFORE = 120,
+    FARM_ON_MAX      = 3,
+
+    MAX_GROUPS = 20, LOCK_REFRESH = 10, LOCK_STALE = 120, PROBE_WAIT = 12,
+
+    WH_BURST = 5, WH_PER_MIN = 20, WH_QUEUE_MAX = 40, WH_MAX_TRIES = 6,
+
+    VX_MAX_ATTEMPTS = 6, VX_UI_TIMEOUT = 150,
+
+    NOTI_BLOCK_ALL  = true,
+    NOTI_PATTERNS   = { "kill", "boss" },
+    NOTI_NAME_KEYS  = { "noti", "toast", "popup" },
+    NOTI_DISABLE_KEYS = { "Noti Profile" },
+
+    SEA_GUARD = true, RENDER_OFF = true, FPS_CAP = 10,
+    LOG_MAX_BYTES = 65536, STALL_AFTER = 120,
+}
+
+local HIGH_TIER = { "dragon","leopard","kitsune","dough","venom","shadow","control","spirit","mammoth","t-rex","trex",
+    "gas","yeti","tiger","magnet","celestial","oni","crimson","skins","gold","east","west","buddha","portal","rumble",
+    "lightning","phoenix","blizzard","gravity","pain","love","spider","sound","soul","quake","creation" }
 
 local function GetVxezeConfig()
     return {
-        ["Auto Fire Shoot Heart Leviathan"] = false,
-        ["Noti Profile"] = false,
-        ["Auto Finish Train Draco Quest"] = false,
-        ["Auto Dodge Skill Seabeast"] = false,
-        ["Account Help"] = false,
-        ["Auto Reset When Complete Volcano"] = false,
-        ["Ignore Craft Volcanic Magnet"] = false,
-        ["Auto Trade Azure Ember"] = false,
-        ["Value Speed Fly Boat"] = 3,
-        ["Hop Find Full Moon"] = false,
-        ["Auto Trial Draco"] = false,
-        ["Auto Aimbot Gun"] = false,
-        ["Fruits v2 Account Help"] = false,
-        ["Auto New World"] = false,
-        ["Drive Boat To Hydra"] = false,
-        ["Auto Summon Soul Ember"] = false,
-        ["Summon Dough King"] = false,
-        ["Auto Store Fruit"] = false,
-        ["Auto Sell Fishing"] = false,
-        ["Auto Get Fully Cyborg"] = false,
-        ["Use Click M1 Skull Guitar Leviathan"] = false,
-        ["Walk On Water"] = true,
-        ["ESP Island"] = false,
-        ["Multi Find Leviathan"] = false,
-        ["Auto Magnet Event"] = false,
-        ["Auto Buy Boat Beast Hunter"] = false,
-        ["Auto Get Rainbow Haki"] = false,
-        ["Boost Fps"] = true,
-        ["Auto Spawn Kitsune Island"] = false,
-        ["Auto Dragon Talon"] = false,
-        ["Change JumpPower"] = false,
-        ["Skill X Melee"] = 0.5,
-        ["Hop Server [ Haki Color / Legendary Sword ]"] = false,
-        ["Hop Server Elite Hunter"] = false,
-        ["Auto Upgrade Sword Inventory"] = false,
-        ["Random Devil Fruit"] = false,
-        ["Auto Secret Quest"] = false,
-        ["Auto Aimbot"] = false,
-        ["Select Mob"] = { ["Factory Staff [Lv. 800]"] = true },
-        ["Auto God Human"] = false,
-        ["Sharkman Need Fish"] = false,
-        ["Auto Tween To Event Fishing Spot"] = false,
-        ["Min Player Join Dungeon"] = 2,
-        ["Auto Yoru Mini (Hop Server)"] = false,
-        ["Auto Farm Observation"] = false,
-        ["Use Dragonstorm For Sea Event"] = false,
-        ["Auto Touch Pad Haki"] = false,
-        ["Attack Dough King"] = false,
-        ["Auto Yoru Mini"] = false,
-        ["Setup Kaitun v4 [ Fully ]"] = false,
-        ["Tween Safe if have Items"] = false,
-        ["Kill Aura Only Raid And Volcano"] = false,
-        ["Auto Get Ghoul"] = false,
-        ["Auto Finish Train Quest"] = false,
-        ["Skill F Blox Fruit"] = 0.5,
-        ["Account Main"] = false,
-        ["Auto Get Cyborg"] = false,
-        ["Skill C Blox Fruit"] = 0.5,
-        ["Auto Turn On V3 Near Door"] = false,
-        ["Auto Factory"] = false,
-        ["Interface Scale"] = 90,
-        ["White Screen"] = false,
-        ["Notify Event Auto Refresh"] = false,
-        ["Auto Sharkman Karate V3"] = false,
-        ["Auto Dodge Skill Terrorshark"] = false,
-        ["Hop Find Boss [ Cake Prince / Tyrant of the Skies ]"] = false,
-        ["Auto TTK"] = false,
-        ["Use Click M1 Fruit Leviathan"] = false,
-        ["Auto Change Dragonstorm With Kill Leviathan"] = false,
-        ["Auto Raid"] = false,
-        ["% Health Player"] = 71,
-        ["Auto Craft Haki Color [ Fully ]"] = false,
-        ["Auto Third World"] = false,
-        ["Kill Boss"] = false,
-        ["Auto Click"] = true,
-        ["Teleport Boat Other CFrame if Rough Sea"] = false,
-        ["Auto Electric Claw"] = false,
-        ["Speed Boat Auto Drive"] = 349,
-        ["Auto Shark Anchor [ Fully ]"] = false,
-        ["Auto Pirate Raid"] = false,
-        ["Accept Quest [ Cake / Bone / Tiki ]"] = true,
-        ["Skill Z Sword"] = 0.5,
-        ["Auto Collect Fruits"] = false,
-        ["Teleport To Kitsune Island"] = false,
-        ["Time Hop Server"] = 5,
-        ["Will Back When over 10km"] = false,
-        ["Skill Z Gun"] = 0.5,
-        ["Auto Find Leviathan"] = false,
-        ["Value Collect Chest to Hop"] = 20,
-        ["Hop Find Fruits / Berries / Chests"] = false,
-        ["Auto Sea Event"] = false,
-        ["Auto Stats"] = false,
-        ["Select Weapon"] = "Melee",
-        ["Auto Sanguine Art"] = false,
-        ["Kill Aura With DragonStorm"] = false,
-        ["Auto Get Observation v1-2 [ Fully ]"] = false,
-        ["Farm Mob"] = false,
-        ["Use Click M1 Skull Guitar For Sea Event"] = false,
-        ["Auto CDK"] = false,
-        ["Auto Crafting Volcanic Magnet"] = false,
-        ["Hop Sever Raid"] = false,
-        ["Auto Turn On Observation"] = true,
-        ["Speed Tween"] = 181,
-        ["Auto Join Dungeon"] = false,
-        ["Attack Darkbeard"] = false,
-        ["Auto Dodge Skill Mobs"] = false,
-        ["No Fog"] = false,
-        ["Auto Change Dragonstorm When Kill Boat"] = false,
-        ["Auto Turn On V3"] = false,
-        ["Tween Boat To Frozen Dimension"] = false,
-        ["Distance Teleport Y"] = 800,
-        ["Skill Z Melee"] = 0.5,
-        ["Select Method Farm"] = "Cake",
-        ["Just Use Skill when Player Active Ken"] = false,
-        ["Value Speed Tween Boat"] = 250,
-        ["Dough King [ Fully ]"] = false,
-        ["Auto Start Leviathan"] = false,
-        ["ESP Berry"] = false,
-        ["Ignore Collect Bone"] = false,
-        ["Auto Advanced Combat"] = false,
-        ["Change WalkSpeed"] = false,
-        ["Auto Pull Lever"] = false,
-        ["Auto Fishing"] = false,
-        ["Auto Buy Spy"] = false,
-        ["Auto Tushita"] = false,
-        ["Ignore Craft Volcanic Magnet Draco"] = false,
-        ["Auto Destroy IDK"] = false,
-        ["Ignore Boss"] = true,
-        ["Value Damage Multi Segments"] = 131411,
-        ["Fully Trial Draco"] = false,
-        ["Auto Dojo Trainer"] = false,
-        ["Auto Trial"] = false,
-        ["Account Buy Chip"] = false,
-        ["Auto Get Cyborg Hop Collect Chest"] = false,
-        ["Kill players When complete Trial"] = false,
-        ["Time Delay Kill"] = 3,
-        ["Use skill fast dont hold"] = false,
-        ["Auto Collect Bone"] = false,
-        ["Webhook Find Prehistoric Island"] = false,
-        ["Auto Get Full Melee [ Fully ]"] = false,
-        ["Use Click M1 Fruit For Sea Event"] = false,
-        ["Skill X Sword"] = 0.5,
-        ["Values Azure Ember"] = 10,
-        ["Auto Turn On V4"] = false,
-        ["Fps Cap"] = 10,
-        ["Input WalkSpeed"] = 200,
-        ["Hop Server Kitsune Island"] = false,
-        ["Auto Pick Card Dungeon"] = false,
-        ["Spam Join"] = false,
-        ["Auto Farm Mastery 600 Sword In Inventory"] = false,
-        ["Auto Collect Chests"] = false,
-        ["Summon Soul Reaper"] = false,
-        ["Auto Yama"] = false,
-        ["Summon Darkbeard"] = false,
-        ["Buy Blox Fruit Sniper Shop"] = false,
-        ["Random Magnet Event"] = false,
-        ["Auto Trade Bone"] = false,
-        ["Hop Find Mirage Island [ Pull Lever ]"] = false,
-        ["Auto Open Chest"] = false,
-        ["Attack Multi Segments Leviathan"] = false,
-        ["Auto Saber"] = false,
-        ["Change Speed Boat"] = false,
-        ["Auto Buy Chip and Attack Law"] = false,
-        ["Auto Reset Vip Leviathan"] = false,
-        ["Collect Chest When Server Spawn Legend Items"] = false,
-        ["Distance Farm Aura"] = 5000,
-        ["Auto Soul Guitar"] = false,
-        ["Hop Find Darkbeard"] = false,
-        ["Hop Server When Farm Observation"] = false,
-        ["Value Speed Boat"] = 200,
-        ["Interface Text Boost"] = 0,
-        ["Auto Buy Chip For Account Select"] = false,
-        ["Farm Mastery"] = false,
-        ["Auto Upgrade Race V2-V3 Draco"] = false,
-        ["Auto Death Step"] = false,
-        ["Auto Load Script"] = true,
-        ["Webhook Upgrade V4 + Train"] = false,
-        ["Auto Upgrade Race V2-V3"] = false,
-        ["Drive Boat To Tiki"] = false,
-        ["Webhook Find Mirage"] = false,
-        ["Auto Farm Mastery 600 Gun In Inventory"] = false,
-        ["Auto Slap Battle"] = false,
-        ["Webhook Find Leviathan"] = false,
-        ["Auto Observation v2"] = false,
-        ["Notify Event Only Current Sea"] = true,
-        ["Select Skills Blox Fruit"] = { ["X"] = true, ["C"] = true, ["Z"] = true, ["F"] = true, ["V"] = true },
-        ["Black Screen"] = false,
-        ["Bring Mob Count"] = 6,
-        ["Skill X Blox Fruit"] = 0.5,
-        ["Change Size Reel"] = false,
-        ["Skill C Melee"] = 0,
-        ["Teleport Player"] = false,
-        ["Auto Dragon Hunter"] = false,
-        ["Input JumpPower"] = 251,
-        ["Account Start Dungeon"] = false,
-        ["Account Pick Slot Raid"] = false,
-        ["Auto Multi Raid"] = false,
-        ["Stack Train With Trial Race"] = false,
-        ["Auto rejoin Disconnect"] = false,
-        ["ESP Player"] = false,
-        ["Auto Find Mirage"] = false,
-        ["Bring Mob"] = true,
-        ["Auto Sharkman Karate"] = false,
-        ["Select Skills Sword"] = { ["X"] = true, ["Z"] = true },
-        ["Fully Event Prehistoric Island"] = false,
-        ["Darkbeard [ Fully ]"] = false,
-        ["Attack No Animation"] = true,
-        ["Start Farm"] = true,
-        ["Auto Collect Egg"] = false,
-        ["Hop Server Get Ghoul"] = false,
-        ["Auto Awake Fruit"] = false,
-        ["Auto Get Draco"] = false,
-        ["Webhook Destroy IDK"] = false,
-        ["Auto Upgrade Dragon Talon"] = false,
-        ["Auto Choose Gears"] = false,
-        ["Auto Attack Dungeon"] = false,
-        ["Auto Upgrade Gun Inventory"] = false,
-        ["Auto Buy Legendary Sword"] = false,
-        ["ESP Fruit"] = false,
-        ["Auto Farm Mastery 600 Melees"] = false,
-        ["Auto Elite Hunter"] = false,
-        ["Health %"] = 40,
-        ["Auto Collect Soul Ember"] = false,
-        ["Fly Boat"] = false,
-        ["Auto Change Dragonstorm With Skull Guitar"] = false,
-        ["Auto Reset Character"] = false,
-        ["Select Skills Melee"] = { ["X"] = true, ["C"] = true, ["Z"] = true },
-        ["Attack Rip Indra"] = false,
-        ["Farm Material"] = false,
-        ["Ping Discord"] = false,
-        ["Use Portal Fruit Teleport"] = false,
-        ["Noclip"] = false,
-        ["Skill V Blox Fruit"] = 0.5,
-        ["Reset Character Buy Boat"] = false,
-        ["Skill X Gun"] = 0.5,
-        ["Get Fruit In Inventory Low Beli"] = false,
-        ["Use Your Boat Beast Hunter"] = false,
-        ["Webhook Store Fruit"] = false,
-        ["Auto Collect Berries"] = false,
-        ["Auto Sea Event With Friend"] = false,
-        ["Teleport Y"] = false,
-        ["Auto Quest Fruits v2"] = false,
-        ["Auto Summon Rip Indra"] = false,
-        ["Tween Until Have Sea Event"] = false,
-        ["Teleport Acient Clock"] = false,
-        ["Prevent Security Kick"] = true,
-        ["Auto Buy Gear Draco"] = false,
-        ["Auto Event Prehistoric Island"] = false,
-        ["Use Skill when Kill Player"] = false,
-        ["Auto Repair Ur Ship"] = false,
-        ["Auto Super Human"] = false,
-        ["Auto Choose Gear Draco"] = false,
-        ["Hidden Hop Dead Hour"] = true,
-        ["Auto Turn On Buso"] = true,
-        ["Select Zone"] = "Zone 3",
-        ["Teleport Frozen Dimension"] = false,
-        ["Auto Attack Leviathan"] = false,
-        ["Attack Soul Reaper"] = false,
-        ["Auto Return Dungeon"] = false,
-        ["Auto Find Prehistoric Island"] = false,
-        ["Auto Buy Gear"] = false,
-        ["Select Skills Gun"] = { ["X"] = true, ["Z"] = true },
-        ["Kill All Boss"] = false,
-        ["Hop Find Dough King"] = false,
-        ["Remove Notifications"] = true,
-        ["Auto Buy Haki Color Recipe"] = false,
-        ["Skill Z Blox Fruit"] = 0.5,
-        ["Auto Accept Quest Fishing"] = false,
-        ["Hop Server Find Boss"] = false
+        ["Auto Fire Shoot Heart Leviathan"]=false,["Noti Profile"]=false,["Auto Finish Train Draco Quest"]=false,["Auto Dodge Skill Seabeast"]=false,["Account Help"]=false,["Auto Reset When Complete Volcano"]=false,["Ignore Craft Volcanic Magnet"]=false,["Auto Trade Azure Ember"]=false,["Value Speed Fly Boat"]=3,["Hop Find Full Moon"]=false,["Auto Trial Draco"]=false,["Auto Aimbot Gun"]=false,["Fruits v2 Account Help"]=false,["Auto New World"]=false,["Drive Boat To Hydra"]=false,["Auto Summon Soul Ember"]=false,["Summon Dough King"]=false,["Auto Store Fruit"]=false,["Auto Sell Fishing"]=false,["Auto Get Fully Cyborg"]=false,["Use Click M1 Skull Guitar Leviathan"]=false,["Walk On Water"]=true,["ESP Island"]=false,["Multi Find Leviathan"]=false,["Auto Magnet Event"]=false,["Auto Buy Boat Beast Hunter"]=false,["Auto Get Rainbow Haki"]=false,["Boost Fps"]=true,["Auto Spawn Kitsune Island"]=false,["Auto Dragon Talon"]=false,["Change JumpPower"]=false,["Skill X Melee"]=0.5,["Hop Server [ Haki Color / Legendary Sword ]"]=false,["Hop Server Elite Hunter"]=false,["Auto Upgrade Sword Inventory"]=false,["Random Devil Fruit"]=false,["Auto Secret Quest"]=false,["Auto Aimbot"]=false,["Select Mob"]={["Factory Staff [Lv. 800]"]=true},["Auto God Human"]=false,["Sharkman Need Fish"]=false,["Auto Tween To Event Fishing Spot"]=false,["Min Player Join Dungeon"]=2,["Auto Yoru Mini (Hop Server)"]=false,["Auto Farm Observation"]=false,["Use Dragonstorm For Sea Event"]=false,["Auto Touch Pad Haki"]=false,["Attack Dough King"]=false,["Auto Yoru Mini"]=false,["Setup Kaitun v4 [ Fully ]"]=false,["Tween Safe if have Items"]=false,["Kill Aura Only Raid And Volcano"]=false,["Auto Get Ghoul"]=false,["Auto Finish Train Quest"]=false,["Skill F Blox Fruit"]=0.5,["Account Main"]=false,["Auto Get Cyborg"]=false,["Skill C Blox Fruit"]=0.5,["Auto Turn On V3 Near Door"]=false,["Auto Factory"]=false,["Interface Scale"]=90,["White Screen"]=false,["Notify Event Auto Refresh"]=false,["Auto Sharkman Karate V3"]=false,["Auto Dodge Skill Terrorshark"]=false,["Hop Find Boss [ Cake Prince / Tyrant of the Skies ]"]=false,["Auto TTK"]=false,["Use Click M1 Fruit Leviathan"]=false,["Auto Change Dragonstorm With Kill Leviathan"]=false,["Auto Raid"]=false,["% Health Player"]=71,["Auto Craft Haki Color [ Fully ]"]=false,["Auto Third World"]=false,["Kill Boss"]=false,["Auto Click"]=true,["Teleport Boat Other CFrame if Rough Sea"]=false,["Auto Electric Claw"]=false,["Speed Boat Auto Drive"]=349,["Auto Shark Anchor [ Fully ]"]=false,["Auto Pirate Raid"]=false,["Accept Quest [ Cake / Bone / Tiki ]"]=true,["Skill Z Sword"]=0.5,["Auto Collect Fruits"]=false,["Teleport To Kitsune Island"]=false,["Time Hop Server"]=5,["Will Back When over 10km"]=false,["Skill Z Gun"]=0.5,["Auto Find Leviathan"]=false,["Value Collect Chest to Hop"]=20,["Hop Find Fruits / Berries / Chests"]=false,["Auto Sea Event"]=false,["Auto Stats"]=false,["Select Weapon"]="Melee",["Auto Sanguine Art"]=false,["Kill Aura With DragonStorm"]=false,["Auto Get Observation v1-2 [ Fully ]"]=false,["Farm Mob"]=false,["Use Click M1 Skull Guitar For Sea Event"]=false,["Auto CDK"]=false,["Auto Crafting Volcanic Magnet"]=false,["Hop Sever Raid"]=false,["Auto Turn On Observation"]=true,["Speed Tween"]=181,["Auto Join Dungeon"]=false,["Attack Darkbeard"]=false,["Auto Dodge Skill Mobs"]=false,["No Fog"]=false,["Auto Change Dragonstorm When Kill Boat"]=false,["Auto Turn On V3"]=false,["Tween Boat To Frozen Dimension"]=false,["Distance Teleport Y"]=800,["Skill Z Melee"]=0.5,["Select Method Farm"]="Cake",["Just Use Skill when Player Active Ken"]=false,["Value Speed Tween Boat"]=250,["Dough King [ Fully ]"]=false,["Auto Start Leviathan"]=false,["ESP Berry"]=false,["Ignore Collect Bone"]=false,["Auto Advanced Combat"]=false,["Change WalkSpeed"]=false,["Auto Pull Lever"]=false,["Auto Fishing"]=false,["Auto Buy Spy"]=false,["Auto Tushita"]=false,["Ignore Craft Volcanic Magnet Draco"]=false,["Auto Destroy IDK"]=false,["Ignore Boss"]=true,["Value Damage Multi Segments"]=131411,["Fully Trial Draco"]=false,["Auto Dojo Trainer"]=false,["Auto Trial"]=false,["Account Buy Chip"]=false,["Auto Get Cyborg Hop Collect Chest"]=false,["Kill players When complete Trial"]=false,["Time Delay Kill"]=3,["Use skill fast dont hold"]=false,["Auto Collect Bone"]=false,["Webhook Find Prehistoric Island"]=false,["Auto Get Full Melee [ Fully ]"]=false,["Use Click M1 Fruit For Sea Event"]=false,["Skill X Sword"]=0.5,["Values Azure Ember"]=10,["Auto Turn On V4"]=false,["Fps Cap"]=10,["Input WalkSpeed"]=200,["Hop Server Kitsune Island"]=false,["Auto Pick Card Dungeon"]=false,["Spam Join"]=false,["Auto Farm Mastery 600 Sword In Inventory"]=false,["Auto Collect Chests"]=false,["Summon Soul Reaper"]=false,["Auto Yama"]=false,["Summon Darkbeard"]=false,["Buy Blox Fruit Sniper Shop"]=false,["Random Magnet Event"]=false,["Auto Trade Bone"]=false,["Hop Find Mirage Island [ Pull Lever ]"]=false,["Auto Open Chest"]=false,["Attack Multi Segments Leviathan"]=false,["Auto Saber"]=false,["Change Speed Boat"]=false,["Auto Buy Chip and Attack Law"]=false,["Auto Reset Vip Leviathan"]=false,["Collect Chest When Server Spawn Legend Items"]=false,["Distance Farm Aura"]=5000,["Auto Soul Guitar"]=false,["Hop Find Darkbeard"]=false,["Hop Server When Farm Observation"]=false,["Value Speed Boat"]=200,["Interface Text Boost"]=0,["Auto Buy Chip For Account Select"]=false,["Farm Mastery"]=false,["Auto Upgrade Race V2-V3 Draco"]=false,["Auto Death Step"]=false,["Auto Load Script"]=true,["Webhook Upgrade V4 + Train"]=false,["Auto Upgrade Race V2-V3"]=false,["Drive Boat To Tiki"]=false,["Webhook Find Mirage"]=false,["Auto Farm Mastery 600 Gun In Inventory"]=false,["Auto Slap Battle"]=false,["Webhook Find Leviathan"]=false,["Auto Observation v2"]=false,["Notify Event Only Current Sea"]=true,["Select Skills Blox Fruit"]={["X"]=true,["C"]=true,["Z"]=true,["F"]=true,["V"]=true},["Black Screen"]=false,["Bring Mob Count"]=6,["Skill X Blox Fruit"]=0.5,["Change Size Reel"]=false,["Skill C Melee"]=0,["Teleport Player"]=false,["Auto Dragon Hunter"]=false,["Input JumpPower"]=251,["Account Start Dungeon"]=false,["Account Pick Slot Raid"]=false,["Auto Multi Raid"]=false,["Stack Train With Trial Race"]=false,["Auto rejoin Disconnect"]=false,["ESP Player"]=false,["Auto Find Mirage"]=false,["Bring Mob"]=true,["Auto Sharkman Karate"]=false,["Select Skills Sword"]={["X"]=true,["Z"]=true},["Fully Event Prehistoric Island"]=false,["Darkbeard [ Fully ]"]=false,["Attack No Animation"]=true,["Start Farm"]=true,["Auto Collect Egg"]=false,["Hop Server Get Ghoul"]=false,["Auto Awake Fruit"]=false,["Auto Get Draco"]=false,["Webhook Destroy IDK"]=false,["Auto Upgrade Dragon Talon"]=false,["Auto Choose Gears"]=false,["Auto Attack Dungeon"]=false,["Auto Upgrade Gun Inventory"]=false,["Auto Buy Legendary Sword"]=false,["ESP Fruit"]=false,["Auto Farm Mastery 600 Melees"]=false,["Auto Elite Hunter"]=false,["Health %"]=40,["Auto Collect Soul Ember"]=false,["Fly Boat"]=false,["Auto Change Dragonstorm With Skull Guitar"]=false,["Auto Reset Character"]=false,["Select Skills Melee"]={["X"]=true,["C"]=true,["Z"]=true},["Attack Rip Indra"]=false,["Farm Material"]=false,["Ping Discord"]=false,["Use Portal Fruit Teleport"]=false,["Noclip"]=false,["Skill V Blox Fruit"]=0.5,["Reset Character Buy Boat"]=false,["Skill X Gun"]=0.5,["Get Fruit In Inventory Low Beli"]=false,["Use Your Boat Beast Hunter"]=false,["Webhook Store Fruit"]=false,["Auto Collect Berries"]=false,["Auto Sea Event With Friend"]=false,["Teleport Y"]=false,["Auto Quest Fruits v2"]=false,["Auto Summon Rip Indra"]=false,["Tween Until Have Sea Event"]=false,["Teleport Acient Clock"]=false,["Prevent Security Kick"]=true,["Auto Buy Gear Draco"]=false,["Auto Event Prehistoric Island"]=false,["Use Skill when Kill Player"]=false,["Auto Repair Ur Ship"]=false,["Auto Super Human"]=false,["Auto Choose Gear Draco"]=false,["Hidden Hop Dead Hour"]=true,["Auto Turn On Buso"]=true,["Select Zone"]="Zone 3",["Teleport Frozen Dimension"]=false,["Auto Attack Leviathan"]=false,["Attack Soul Reaper"]=false,["Auto Return Dungeon"]=false,["Auto Find Prehistoric Island"]=false,["Auto Buy Gear"]=false,["Select Skills Gun"]={["X"]=true,["Z"]=true},["Kill All Boss"]=false,["Hop Find Dough King"]=false,["Remove Notifications"]=true,["Auto Buy Haki Color Recipe"]=false,["Skill Z Blox Fruit"]=0.5,["Auto Accept Quest Fishing"]=false,["Hop Server Find Boss"]=false
     }
-end
-
-local CONFLICT_KEYWORDS = { "hop", "rejoin", "load script", "webhook", "spam join", "store fruit", "reset character", "white screen", "black screen" }
-local function SanitizeConfig(cfg)
-    local n = 0
-    for k, v in pairs(cfg) do
-        if type(k) == "string" and v == true then
-            local lk = string.lower(k)
-            for _, kw in ipairs(CONFLICT_KEYWORDS) do
-                if string.find(lk, kw, 1, true) then
-                    cfg[k] = false
-                    n += 1
-                    break
-                end
-            end
-        end
-    end
-    if type(cfg["Webhook"]) == "table" then cfg["Webhook"]["Enable"] = false end
-    return cfg, n
 end
 
 local function GetVxezeLevelConfig()
     return {
-        ["Auto Fire Shoot Heart Leviathan"] = false,
-        ["Auto Farm Mastery 600 Gun In Inventory"] = false,
-        ["Auto Finish Train Draco Quest"] = false,
-        ["Auto Dodge Skill Seabeast"] = false,
-        ["Account Help"] = false,
-        ["Auto Reset When Complete Volcano"] = false,
-        ["Ignore Craft Volcanic Magnet"] = false,
-        ["Auto Trade Azure Ember"] = false,
-        ["Quest"] = { ["Race V2-V3"] = true, ["Haki Rainbow"] = true },
-        ["Value Speed Fly Boat"] = 3,
-        ["Hop Find Full Moon"] = false,
-        ["Auto Trial Draco"] = false,
-        ["Auto Aimbot Gun"] = false,
-        ["Fruits v2 Account Help"] = false,
-        ["Auto New World"] = false,
-        ["Drive Boat To Hydra"] = false,
-        ["Auto Summon Soul Ember"] = false,
-        ["Summon Dough King"] = false,
-        ["Auto Store Fruit"] = false,
-        ["Auto Sell Fishing"] = false,
-        ["Auto Get Fully Cyborg"] = false,
-        ["Use Click M1 Skull Guitar Leviathan"] = false,
-        ["Walk On Water"] = true,
-        ["ESP Island"] = false,
-        ["Multi Find Leviathan"] = false,
-        ["Auto Magnet Event"] = false,
-        ["Auto Buy Boat Beast Hunter"] = false,
-        ["Auto Get Rainbow Haki"] = false,
-        ["Boost Fps"] = false,
-        ["Fruits"] = { ["Farm Mastery Fruits"] = true, ["Fruits Eat"] = {"Gravity-Gravity","Pain-Pain"}, ["Auto Eat Fruits"] = false },
-        ["Auto Spawn Kitsune Island"] = false,
-        ["Auto Dragon Talon"] = false,
-        ["Change JumpPower"] = false,
-        ["Skill X Melee"] = 0.5,
-        ["Hop Server [ Haki Color / Legendary Sword ]"] = false,
-        ["Hop Server Elite Hunter"] = false,
-        ["Auto Upgrade Sword Inventory"] = false,
-        ["Random Devil Fruit"] = false,
-        ["Auto Secret Quest"] = false,
-        ["Auto Aimbot"] = false,
-        ["Kill All Boss"] = false,
-        ["Sharkman Need Fish"] = false,
-        ["Use Your Boat Beast Hunter"] = false,
-        ["Min Player Join Dungeon"] = 2,
-        ["Auto Yoru Mini (Hop Server)"] = false,
-        ["Auto Farm Observation"] = false,
-        ["Use Dragonstorm For Sea Event"] = false,
-        ["Auto Touch Pad Haki"] = false,
-        ["Attack Dough King"] = false,
-        ["Auto Yoru Mini"] = false,
-        ["Setup Kaitun v4 [ Fully ]"] = false,
-        ["Tween Safe if have Items"] = false,
-        ["Kill Aura Only Raid And Volcano"] = false,
-        ["Auto Get Ghoul"] = false,
-        ["Auto Finish Train Quest"] = false,
-        ["Skill F Blox Fruit"] = 0.5,
-        ["Account Main"] = false,
-        ["Auto Get Cyborg"] = false,
-        ["Skill C Blox Fruit"] = 0.5,
-        ["Auto Turn On V3 Near Door"] = false,
-        ["Auto Factory"] = false,
-        ["White Screen"] = false,
-        ["Notify Event Auto Refresh"] = false,
-        ["Auto Sharkman Karate V3"] = false,
-        ["Auto Dodge Skill Terrorshark"] = false,
-        ["Hop Find Boss [ Cake Prince / Tyrant of the Skies ]"] = false,
-        ["Auto TTK"] = false,
-        ["Use Click M1 Fruit Leviathan"] = false,
-        ["Auto Change Dragonstorm With Kill Leviathan"] = false,
-        ["Auto Raid"] = false,
-        ["% Health Player"] = 40,
-        ["Auto Craft Haki Color [ Fully ]"] = false,
-        ["Auto Third World"] = false,
-        ["MiscItem"] = { ["Pole1st"] = true, ["Dragon Trident"] = true, ["Rengoku"] = true, ["Spikey Trident"] = true, ["Buddy"] = true, ["Feathered Visage"] = true, ["Gravity Blade"] = true, ["Venom Bow"] = true, ["Canvander"] = true, ["Twin Hooks"] = true },
-        ["Kill Boss"] = false,
-        ["Auto Click"] = true,
-        ["Teleport Boat Other CFrame if Rough Sea"] = false,
-        ["Auto Electric Claw"] = false,
-        ["Speed Boat Auto Drive"] = 300,
-        ["Auto Shark Anchor [ Fully ]"] = false,
-        ["Auto Pirate Raid"] = false,
-        ["Accept Quest [ Cake / Bone / Tiki ]"] = false,
-        ["Skill Z Sword"] = 0.5,
-        ["Auto Collect Fruits"] = false,
-        ["Teleport To Kitsune Island"] = false,
-        ["Time Hop Server"] = 5,
-        ["Will Back When over 10km"] = false,
-        ["Skill Z Gun"] = 0.5,
-        ["Auto Find Leviathan"] = false,
-        ["Value Collect Chest to Hop"] = 20,
-        ["Hop Find Fruits / Berries / Chests"] = false,
-        ["Auto Sea Event"] = false,
-        ["Auto Stats"] = false,
-        ["Select Weapon"] = "Melee",
-        ["Auto Sanguine Art"] = false,
-        ["Kill Aura With DragonStorm"] = false,
-        ["Auto Get Observation v1-2 [ Fully ]"] = false,
-        ["Farm Mob"] = false,
-        ["Use Click M1 Skull Guitar For Sea Event"] = false,
-        ["Auto CDK"] = false,
-        ["Auto Crafting Volcanic Magnet"] = false,
-        ["Hop Sever Raid"] = false,
-        ["Auto Turn On Observation"] = true,
-        ["Speed Tween"] = 177,
-        ["Auto Join Dungeon"] = false,
-        ["Setting"] = { ["White Screen"] = false, ["UiCheckItem"] = false },
-        ["Attack Darkbeard"] = false,
-        ["Auto Dodge Skill Mobs"] = false,
-        ["No Fog"] = false,
-        ["Auto Change Dragonstorm When Kill Boat"] = false,
-        ["Auto Turn On V3"] = false,
-        ["Tween Boat To Frozen Dimension"] = false,
-        ["Distance Teleport Y"] = 0,
-        ["Skill Z Melee"] = 0.5,
-        ["Select Method Farm"] = "Level",
-        ["Just Use Skill when Player Active Ken"] = false,
-        ["Value Speed Tween Boat"] = 250,
-        ["Dough King [ Fully ]"] = false,
-        ["Auto Start Leviathan"] = false,
-        ["ESP Berry"] = false,
-        ["Auto Multi Raid"] = false,
-        ["Auto Advanced Combat"] = false,
-        ["Change WalkSpeed"] = false,
-        ["Auto Pull Lever"] = false,
-        ["Auto Sharkman Karate"] = false,
-        ["Auto Buy Spy"] = false,
-        ["Auto Tushita"] = false,
-        ["Ignore Craft Volcanic Magnet Draco"] = false,
-        ["Auto Destroy IDK"] = false,
-        ["Ignore Boss"] = false,
-        ["Value Damage Multi Segments"] = 30000,
-        ["Fully Trial Draco"] = false,
-        ["Auto Dojo Trainer"] = false,
-        ["Auto Trial"] = false,
-        ["Account Buy Chip"] = false,
-        ["Auto Get Cyborg Hop Collect Chest"] = false,
-        ["Kill players When complete Trial"] = false,
-        ["Time Delay Kill"] = 5,
-        ["Use skill fast dont hold"] = false,
-        ["Auto Collect Bone"] = false,
-        ["Webhook Find Prehistoric Island"] = false,
-        ["Auto Get Full Melee [ Fully ]"] = false,
-        ["Use Click M1 Fruit For Sea Event"] = false,
-        ["Notify Event Only Current Sea"] = true,
-        ["Values Azure Ember"] = 10,
-        ["Auto Turn On V4"] = false,
-        ["Input WalkSpeed"] = 200,
-        ["Hop Server Kitsune Island"] = false,
-        ["Auto Pick Card Dungeon"] = false,
-        ["Spam Join"] = false,
-        ["Auto Farm Mastery 600 Sword In Inventory"] = false,
-        ["Auto Collect Chests"] = false,
-        ["Summon Soul Reaper"] = false,
-        ["Auto Yama"] = false,
-        ["Summon Darkbeard"] = false,
-        ["Buy Blox Fruit Sniper Shop"] = false,
-        ["Random Magnet Event"] = false,
-        ["Auto Trade Bone"] = false,
-        ["Hop Find Mirage Island [ Pull Lever ]"] = false,
-        ["Auto Open Chest"] = false,
-        ["Attack Multi Segments Leviathan"] = false,
-        ["Auto Saber"] = false,
-        ["Change Speed Boat"] = false,
-        ["Auto Buy Chip and Attack Law"] = false,
-        ["Auto Reset Vip Leviathan"] = false,
-        ["Collect Chest When Server Spawn Legend Items"] = false,
-        ["Distance Farm Aura"] = 5000,
-        ["Auto Soul Guitar"] = false,
-        ["Hop Find Darkbeard"] = false,
-        ["Hop Server When Farm Observation"] = false,
-        ["Hop Server Find Boss"] = false,
-        ["Remove Notifications"] = false,
-        ["Auto Buy Chip For Account Select"] = false,
-        ["Farm Mastery"] = false,
-        ["Skill Z Blox Fruit"] = 0.5,
-        ["Webhook Upgrade V4 + Train"] = false,
-        ["Auto Load Script"] = false,
-        ["Teleport Y"] = false,
-        ["Auto Upgrade Race V2-V3"] = false,
-        ["Drive Boat To Tiki"] = false,
-        ["Hop Find Dough King"] = false,
-        ["Auto Return Dungeon"] = false,
-        ["Select Skills Melee"] = { ["X"] = true, ["C"] = true, ["Z"] = true },
-        ["Skill X Blox Fruit"] = 0.5,
-        ["Auto Observation v2"] = false,
-        ["Auto Slap Battle"] = false,
-        ["Select Skills Blox Fruit"] = { ["X"] = true, ["C"] = true, ["Z"] = true, ["V"] = true, ["F"] = true },
-        ["Skill C Melee"] = 0.5,
-        ["Bring Mob Count"] = 6,
-        ["Teleport Frozen Dimension"] = false,
-        ["Auto Awake Fruit"] = false,
-        ["Black Screen"] = false,
-        ["Auto Collect Soul Ember"] = false,
-        ["Auto Repair Ur Ship"] = false,
-        ["Attack Soul Reaper"] = false,
-        ["Account Start Dungeon"] = false,
-        ["Auto Dragon Hunter"] = false,
-        ["Auto Attack Leviathan"] = false,
-        ["Stack Train With Trial Race"] = false,
-        ["Auto rejoin Disconnect"] = false,
-        ["Fly Boat"] = false,
-        ["Auto Find Mirage"] = false,
-        ["Bring Mob"] = true,
-        ["Teleport Player"] = false,
-        ["Account Pick Slot Raid"] = false,
-        ["Attack No Animation"] = true,
-        ["Darkbeard [ Fully ]"] = false,
-        ["Auto Fishing"] = false,
-        ["Auto Choose Gear Draco"] = false,
-        ["Tween Until Have Sea Event"] = false,
-        ["Start Farm"] = false,
-        ["Auto Buy Gear Draco"] = false,
-        ["Auto Get Draco"] = false,
-        ["Webhook Destroy IDK"] = false,
-        ["Hop Server Get Ghoul"] = false,
-        ["Auto Choose Gears"] = false,
-        ["Teleport Acient Clock"] = false,
-        ["Auto Summon Rip Indra"] = false,
-        ["Auto Reset Character"] = false,
-        ["Auto Attack Dungeon"] = false,
-        ["Skill X Gun"] = 0.5,
-        ["Auto Elite Hunter"] = false,
-        ["Auto Tween To Event Fishing Spot"] = false,
-        ["ESP Fruit"] = false,
-        ["Auto Buy Legendary Sword"] = false,
-        ["Auto Change Dragonstorm With Skull Guitar"] = false,
-        ["Noclip"] = false,
-        ["Get Fruit In Inventory Low Beli"] = false,
-        ["Attack Rip Indra"] = false,
-        ["Farm Material"] = false,
-        ["Ping Discord"] = false,
-        ["Use Portal Fruit Teleport"] = false,
-        ["Select Skills Gun"] = { ["Z"] = true, ["X"] = true },
-        ["Skill X Sword"] = 0.5,
-        ["Reset Character Buy Boat"] = false,
-        ["Auto Collect Berries"] = false,
-        ["Auto Turn On Buso"] = true,
-        ["Health %"] = 40,
-        ["Webhook Store Fruit"] = false,
-        ["Auto Quest Fruits v2"] = false,
-        ["Auto Sea Event With Friend"] = false,
-        ["Auto Upgrade Dragon Talon"] = false,
-        ["Auto Farm Mastery 600 Melees"] = false,
-        ["Auto Upgrade Gun Inventory"] = false,
-        ["Auto God Human"] = false,
-        ["Select Skills Sword"] = { ["Z"] = true, ["X"] = true },
-        ["Prevent Security Kick"] = true,
-        ["Auto Event Prehistoric Island"] = false,
-        ["Hidden Hop Dead Hour"] = true,
-        ["Use Skill when Kill Player"] = false,
-        ["Fully Event Prehistoric Island"] = false,
-        ["Auto Super Human"] = false,
-        ["Auto Collect Egg"] = false,
-        ["Auto Death Step"] = false,
-        ["ESP Player"] = false,
-        ["Change Size Reel"] = false,
-        ["Webhook"] = { ["Enable"] = false, ["UrlWebhook"] = "" },
-        ["Input JumpPower"] = 200,
-        ["Ignore Collect Bone"] = false,
-        ["MainItem"] = { ["Hallow Scythe"] = true, ["Get 3 Legendary Colors Haki"] = true, ["Skull Guitar"] = true, ["Cursed Dual Katana"] = true, ["GodHuman"] = true, ["Saber"] = true },
-        ["Auto Find Prehistoric Island"] = false,
-        ["Auto Buy Gear"] = false,
-        ["Noti Profile"] = false,
-        ["Skill V Blox Fruit"] = 0.5,
-        ["Webhook Find Leviathan"] = false,
-        ["Webhook Find Mirage"] = false,
-        ["Auto Buy Haki Color Recipe"] = false,
-        ["Auto Upgrade Race V2-V3 Draco"] = false,
-        ["Auto Accept Quest Fishing"] = false,
-        ["Value Speed Boat"] = 200
+        ["Auto Fire Shoot Heart Leviathan"]=false,["Auto Farm Mastery 600 Gun In Inventory"]=false,["Auto Finish Train Draco Quest"]=false,["Auto Dodge Skill Seabeast"]=false,["Account Help"]=false,["Auto Reset When Complete Volcano"]=false,["Ignore Craft Volcanic Magnet"]=false,["Auto Trade Azure Ember"]=false,["Quest"]={["Race V2-V3"]=true,["Haki Rainbow"]=true},["Value Speed Fly Boat"]=3,["Hop Find Full Moon"]=false,["Auto Trial Draco"]=false,["Auto Aimbot Gun"]=false,["Fruits v2 Account Help"]=false,["Auto New World"]=false,["Drive Boat To Hydra"]=false,["Auto Summon Soul Ember"]=false,["Summon Dough King"]=false,["Auto Store Fruit"]=false,["Auto Sell Fishing"]=false,["Auto Get Fully Cyborg"]=false,["Use Click M1 Skull Guitar Leviathan"]=false,["Walk On Water"]=true,["ESP Island"]=false,["Multi Find Leviathan"]=false,["Auto Magnet Event"]=false,["Auto Buy Boat Beast Hunter"]=false,["Auto Get Rainbow Haki"]=false,["Boost Fps"]=false,["Fruits"]={["Farm Mastery Fruits"]=true,["Fruits Eat"]={"Gravity-Gravity","Pain-Pain"},["Auto Eat Fruits"]=false},["Auto Spawn Kitsune Island"]=false,["Auto Dragon Talon"]=false,["Change JumpPower"]=false,["Skill X Melee"]=0.5,["Hop Server [ Haki Color / Legendary Sword ]"]=false,["Hop Server Elite Hunter"]=false,["Auto Upgrade Sword Inventory"]=false,["Random Devil Fruit"]=false,["Auto Secret Quest"]=false,["Auto Aimbot"]=false,["Kill All Boss"]=false,["Sharkman Need Fish"]=false,["Use Your Boat Beast Hunter"]=false,["Min Player Join Dungeon"]=2,["Auto Yoru Mini (Hop Server)"]=false,["Auto Farm Observation"]=false,["Use Dragonstorm For Sea Event"]=false,["Auto Touch Pad Haki"]=false,["Attack Dough King"]=false,["Auto Yoru Mini"]=false,["Setup Kaitun v4 [ Fully ]"]=false,["Tween Safe if have Items"]=false,["Kill Aura Only Raid And Volcano"]=false,["Auto Get Ghoul"]=false,["Auto Finish Train Quest"]=false,["Skill F Blox Fruit"]=0.5,["Account Main"]=false,["Auto Get Cyborg"]=false,["Skill C Blox Fruit"]=0.5,["Auto Turn On V3 Near Door"]=false,["Auto Factory"]=false,["White Screen"]=false,["Notify Event Auto Refresh"]=false,["Auto Sharkman Karate V3"]=false,["Auto Dodge Skill Terrorshark"]=false,["Hop Find Boss [ Cake Prince / Tyrant of the Skies ]"]=false,["Auto TTK"]=false,["Use Click M1 Fruit Leviathan"]=false,["Auto Change Dragonstorm With Kill Leviathan"]=false,["Auto Raid"]=false,["% Health Player"]=40,["Auto Craft Haki Color [ Fully ]"]=false,["Auto Third World"]=false,["MiscItem"]={["Pole1st"]=true,["Dragon Trident"]=true,["Rengoku"]=true,["Spikey Trident"]=true,["Buddy"]=true,["Feathered Visage"]=true,["Gravity Blade"]=true,["Venom Bow"]=true,["Canvander"]=true,["Twin Hooks"]=true},["Kill Boss"]=false,["Auto Click"]=true,["Teleport Boat Other CFrame if Rough Sea"]=false,["Auto Electric Claw"]=false,["Speed Boat Auto Drive"]=300,["Auto Shark Anchor [ Fully ]"]=false,["Auto Pirate Raid"]=false,["Accept Quest [ Cake / Bone / Tiki ]"]=false,["Skill Z Sword"]=0.5,["Auto Collect Fruits"]=false,["Teleport To Kitsune Island"]=false,["Time Hop Server"]=5,["Will Back When over 10km"]=false,["Skill Z Gun"]=0.5,["Auto Find Leviathan"]=false,["Value Collect Chest to Hop"]=20,["Hop Find Fruits / Berries / Chests"]=false,["Auto Sea Event"]=false,["Auto Stats"]=false,["Select Weapon"]="Melee",["Auto Sanguine Art"]=false,["Kill Aura With DragonStorm"]=false,["Auto Get Observation v1-2 [ Fully ]"]=false,["Farm Mob"]=false,["Use Click M1 Skull Guitar For Sea Event"]=false,["Auto CDK"]=false,["Auto Crafting Volcanic Magnet"]=false,["Hop Sever Raid"]=false,["Auto Turn On Observation"]=true,["Speed Tween"]=177,["Auto Join Dungeon"]=false,["Setting"]={["White Screen"]=false,["UiCheckItem"]=false},["Attack Darkbeard"]=false,["Auto Dodge Skill Mobs"]=false,["No Fog"]=false,["Auto Change Dragonstorm When Kill Boat"]=false,["Auto Turn On V3"]=false,["Tween Boat To Frozen Dimension"]=false,["Distance Teleport Y"]=0,["Skill Z Melee"]=0.5,["Select Method Farm"]="Level",["Just Use Skill when Player Active Ken"]=false,["Value Speed Tween Boat"]=250,["Dough King [ Fully ]"]=false,["Auto Start Leviathan"]=false,["ESP Berry"]=false,["Auto Multi Raid"]=false,["Auto Advanced Combat"]=false,["Change WalkSpeed"]=false,["Auto Pull Lever"]=false,["Auto Sharkman Karate"]=false,["Auto Buy Spy"]=false,["Auto Tushita"]=false,["Ignore Craft Volcanic Magnet Draco"]=false,["Auto Destroy IDK"]=false,["Ignore Boss"]=false,["Value Damage Multi Segments"]=30000,["Fully Trial Draco"]=false,["Auto Dojo Trainer"]=false,["Auto Trial"]=false,["Account Buy Chip"]=false,["Auto Get Cyborg Hop Collect Chest"]=false,["Kill players When complete Trial"]=false,["Time Delay Kill"]=5,["Use skill fast dont hold"]=false,["Auto Collect Bone"]=false,["Webhook Find Prehistoric Island"]=false,["Auto Get Full Melee [ Fully ]"]=false,["Use Click M1 Fruit For Sea Event"]=false,["Notify Event Only Current Sea"]=true,["Values Azure Ember"]=10,["Auto Turn On V4"]=false,["Input WalkSpeed"]=200,["Hop Server Kitsune Island"]=false,["Auto Pick Card Dungeon"]=false,["Spam Join"]=false,["Auto Farm Mastery 600 Sword In Inventory"]=false,["Auto Collect Chests"]=false,["Summon Soul Reaper"]=false,["Auto Yama"]=false,["Summon Darkbeard"]=false,["Buy Blox Fruit Sniper Shop"]=false,["Random Magnet Event"]=false,["Auto Trade Bone"]=false,["Hop Find Mirage Island [ Pull Lever ]"]=false,["Auto Open Chest"]=false,["Attack Multi Segments Leviathan"]=false,["Auto Saber"]=false,["Change Speed Boat"]=false,["Auto Buy Chip and Attack Law"]=false,["Auto Reset Vip Leviathan"]=false,["Collect Chest When Server Spawn Legend Items"]=false,["Distance Farm Aura"]=5000,["Auto Soul Guitar"]=false,["Hop Find Darkbeard"]=false,["Hop Server When Farm Observation"]=false,["Hop Server Find Boss"]=false,["Remove Notifications"]=true,["Auto Buy Chip For Account Select"]=false,["Farm Mastery"]=false,["Skill Z Blox Fruit"]=0.5,["Webhook Upgrade V4 + Train"]=false,["Auto Load Script"]=false,["Teleport Y"]=false,["Auto Upgrade Race V2-V3"]=false,["Drive Boat To Tiki"]=false,["Hop Find Dough King"]=false,["Auto Return Dungeon"]=false,["Select Skills Melee"]={["X"]=true,["C"]=true,["Z"]=true},["Skill X Blox Fruit"]=0.5,["Auto Observation v2"]=false,["Auto Slap Battle"]=false,["Select Skills Blox Fruit"]={["X"]=true,["C"]=true,["Z"]=true,["V"]=true,["F"]=true},["Skill C Melee"]=0.5,["Bring Mob Count"]=6,["Teleport Frozen Dimension"]=false,["Auto Awake Fruit"]=false,["Black Screen"]=false,["Auto Collect Soul Ember"]=false,["Auto Repair Ur Ship"]=false,["Attack Soul Reaper"]=false,["Account Start Dungeon"]=false,["Auto Dragon Hunter"]=false,["Auto Attack Leviathan"]=false,["Stack Train With Trial Race"]=false,["Auto rejoin Disconnect"]=false,["Fly Boat"]=false,["Auto Find Mirage"]=false,["Bring Mob"]=true,["Teleport Player"]=false,["Account Pick Slot Raid"]=false,["Attack No Animation"]=true,["Darkbeard [ Fully ]"]=false,["Auto Fishing"]=false,["Auto Choose Gear Draco"]=false,["Tween Until Have Sea Event"]=false,["Start Farm"]=true,["Auto Buy Gear Draco"]=false,["Auto Get Draco"]=false,["Webhook Destroy IDK"]=false,["Hop Server Get Ghoul"]=false,["Auto Choose Gears"]=false,["Teleport Acient Clock"]=false,["Auto Summon Rip Indra"]=false,["Auto Reset Character"]=false,["Auto Attack Dungeon"]=false,["Skill X Gun"]=0.5,["Auto Elite Hunter"]=false,["Auto Tween To Event Fishing Spot"]=false,["ESP Fruit"]=false,["Auto Buy Legendary Sword"]=false,["Auto Change Dragonstorm With Skull Guitar"]=false,["Noclip"]=false,["Get Fruit In Inventory Low Beli"]=false,["Attack Rip Indra"]=false,["Farm Material"]=false,["Ping Discord"]=false,["Use Portal Fruit Teleport"]=false,["Select Skills Gun"]={["Z"]=true,["X"]=true},["Skill X Sword"]=0.5,["Reset Character Buy Boat"]=false,["Auto Collect Berries"]=false,["Auto Turn On Buso"]=true,["Health %"]=40,["Webhook Store Fruit"]=false,["Auto Quest Fruits v2"]=false,["Auto Sea Event With Friend"]=false,["Auto Upgrade Dragon Talon"]=false,["Auto Farm Mastery 600 Melees"]=false,["Auto Upgrade Gun Inventory"]=false,["Auto God Human"]=false,["Select Skills Sword"]={["Z"]=true,["X"]=true},["Prevent Security Kick"]=true,["Auto Event Prehistoric Island"]=false,["Hidden Hop Dead Hour"]=true,["Use Skill when Kill Player"]=false,["Fully Event Prehistoric Island"]=false,["Auto Super Human"]=false,["Auto Collect Egg"]=false,["Auto Death Step"]=false,["ESP Player"]=false,["Change Size Reel"]=false,["Webhook"]={["Enable"]=false,["UrlWebhook"]=""},["Input JumpPower"]=200,["Ignore Collect Bone"]=false,["MainItem"]={["Hallow Scythe"]=true,["Get 3 Legendary Colors Haki"]=true,["Skull Guitar"]=true,["Cursed Dual Katana"]=true,["GodHuman"]=true,["Saber"]=true},["Auto Find Prehistoric Island"]=false,["Auto Buy Gear"]=false,["Noti Profile"]=false,["Skill V Blox Fruit"]=0.5,["Webhook Find Leviathan"]=false,["Webhook Find Mirage"]=false,["Auto Buy Haki Color Recipe"]=false,["Auto Upgrade Race V2-V3 Draco"]=false,["Auto Accept Quest Fishing"]=false,["Value Speed Boat"]=200
     }
 end
 
--- ==========================================
--- 1b. SEA GUARD
--- ==========================================
-do
-    local PLACE = { [2753915549] = 1, [4442272183] = 2, [7449423635] = 3 }
-    getgenv().BloxSea = { sea = PLACE[game.PlaceId], level = nil }
+
+----------------------------------------------------------------
+-- 1. GLOBALS
+----------------------------------------------------------------
+local Players, RS, RunService = game:GetService("Players"), game:GetService("ReplicatedStorage"), game:GetService("RunService")
+local HttpService, VirtualUser = game:GetService("HttpService"), game:GetService("VirtualUser")
+local GuiService, VIM = game:GetService("GuiService"), game:GetService("VirtualInputManager")
+local TeleportService = game:GetService("TeleportService")
+local LP = Players.LocalPlayer
+local env = getgenv()
+local UID = tostring(LP.UserId)
+
+repeat task.wait(1) until game:IsLoaded()
+local PG = LP:WaitForChild("PlayerGui")
+local Remotes = RS:WaitForChild("Remotes", 30)
+
+if env.BloxSM and env.BloxSM.Unload then pcall(env.BloxSM.Unload) end
+
+local S = { alive = true, conns = {}, beats = {} }
+local Log, FS, Task, WH, Group, Store, Rot, Sess, Dead = {}, {}, {}, {}, {}, {}, {}, {}, {}
+local Vx, Noti, Input, Team, Farm, Gacha, Sea, UI, Watch = {}, {}, {}, {}, {}, {}, {}, {}, {}
+
+local function clamp(x, lo, hi) if x < lo then return lo elseif x > hi then return hi end return x end
+local function hasHRP() local c = LP.Character return (c and c:FindFirstChild("HumanoidRootPart")) and true or false end
+local function commF() return Remotes and Remotes:FindFirstChild("CommF_") end
+
+----------------------------------------------------------------
+-- 2. CORE: file system, rotating log, task helpers
+----------------------------------------------------------------
+function FS.ok() return type(isfile) == "function" and type(readfile) == "function" and type(writefile) == "function" end
+function FS.exists(p) if type(isfile) ~= "function" then return false end local ok, r = pcall(isfile, p) return ok and r and true or false end
+function FS.read(p)
+    if not FS.exists(p) then return nil end
+    local ok, d = pcall(readfile, p)
+    if ok and type(d) == "string" then return d end
+end
+function FS.write(p, d) if type(writefile) ~= "function" then return false end return (pcall(writefile, p, d)) end
+function FS.delete(p) if type(delfile) == "function" and FS.exists(p) then pcall(delfile, p) end end
+function FS.readJSON(p)
+    local d = FS.read(p)
+    if not d then return nil end
+    local ok, t = pcall(HttpService.JSONDecode, HttpService, d)
+    if ok and type(t) == "table" then return t end
+end
+function FS.writeJSON(p, t)
+    local ok, s = pcall(HttpService.JSONEncode, HttpService, t)
+    if ok then return FS.write(p, s) end
+    return false
 end
 
--- ==========================================
--- 1c. LEVEL GUARD & SCRIPT LOADER (Vxeze saja)
--- ==========================================
-do
-    local BS = getgenv().BloxSea
-    local function ReadLevel()
-        local ok, v = pcall(function()
-            local d = game:GetService("Players").LocalPlayer:FindFirstChild("Data")
-            local l = d and d:FindFirstChild("Level")
-            return l and tonumber(l.Value)
-        end)
-        return ok and v or nil
+Log.path, Log.buf, Log.size = "BloxLog_" .. UID .. ".txt", {}, 0
+function Log.add(level, msg)
+    local line = os.date("%H:%M:%S") .. " [" .. level .. "] " .. tostring(msg)
+    Log.buf[#Log.buf + 1] = line
+    if #Log.buf > 300 then table.remove(Log.buf, 1) end
+    if level == "I" then print("[BloxSM] " .. tostring(msg)) else warn("[BloxSM] " .. tostring(msg)) end
+end
+function Log.flush()
+    if #Log.buf == 0 or not FS.ok() then return end
+    local chunk = table.concat(Log.buf, "\n") .. "\n"
+    Log.buf = {}
+    if type(appendfile) == "function" then pcall(appendfile, Log.path, chunk)
+    else FS.write(Log.path, (FS.read(Log.path) or "") .. chunk) end
+    Log.size = Log.size + #chunk
+    if Log.size > CFG.LOG_MAX_BYTES then
+        local cur = FS.read(Log.path)
+        if cur then FS.write(Log.path .. ".1", cur) end
+        FS.write(Log.path, "")
+        Log.size = 0
     end
-    local function Launch(lv)
-        local mode, cfg
-        if lv >= LEVEL_VXEZE_MIN then
-            mode, cfg = "beli", GetVxezeConfig()
-        else
-            mode, cfg = "leveling", GetVxezeLevelConfig()
+end
+
+function Task.spawn(name, fn, ...)
+    local args = table.pack(...)
+    return task.spawn(function()
+        local ok, err = xpcall(function() return fn(table.unpack(args, 1, args.n)) end, debug.traceback)
+        if not ok then Log.add("E", name .. " crashed: " .. tostring(err)) end
+    end)
+end
+function Task.service(name, interval, fn)
+    Task.spawn(name, function()
+        local failures = 0
+        while S.alive do
+            S.beats[name] = os.clock()
+            local ok, res = pcall(fn)
+            local d = interval
+            if ok then
+                failures = 0
+                if res == false then break end
+                if type(res) == "number" then d = res end
+            else
+                failures = failures + 1
+                d = math.min(60, interval * (2 ^ failures))
+                Log.add("E", name .. " error: " .. tostring(res))
+            end
+            task.wait(math.max(0.2, d))
         end
-        local _, removed = SanitizeConfig(cfg)
-        BS.mode = mode
-        getgenv().Config = cfg
-        print("[Level Guard] Level " .. tostring(lv) .. " -> mode " .. mode .. " (" .. removed .. " fitur konflik dimatikan)")
-        task.spawn(function()
-            local ok, e = pcall(function() loadstring(game:HttpGet(VXEZE_URL))() end)
-            if not ok then warn("[Level Guard] Vxeze gagal dimuat: " .. tostring(e)) end
-        end)
-    end
-    task.spawn(function()
-        local lv = ReadLevel()
-        while not lv do
-            task.wait(3)
-            lv = ReadLevel()
-        end
-        BS.level = lv
-        Launch(lv)
+        S.beats[name] = nil
     end)
 end
 
--- ==========================================
--- 2. BLOXFACTORY
--- ==========================================
-local WEBHOOK_FRUIT    = "https://discord.com/api/webhooks/1561728793226383510/PeYJqeHWViBXqs4M0VowG9xM-zk3Uupk2ta8UtWNUqh_R2IQaPIsxMIgZEXNnbRdJ2CM"
-local WEBHOOK_BELI     = "https://discord.com/api/webhooks/1564228949033222204/E2n26s5XvL45E4c6Ylnozwb3cyi03QOyinAcltbcrKyAjzj8bLCGMVeDo4IR3mSeOCwd"
+----------------------------------------------------------------
+-- 3. WEBHOOK MANAGER
+----------------------------------------------------------------
+WH.queues = { fruit = {}, report = {} }
+WH.tokens = { fruit = CFG.WH_BURST, report = CFG.WH_BURST }
+WH.lastRefill, WH.dirty = os.clock(), false
+WH.outbox = "BloxOutbox_" .. UID .. ".json"
 
-local RENDER_OFF       = true    
-local FPS_CAP          = 10       
-local ROLL_INTERVAL    = 7200    
-local ACCOUNT_TIME     = 960    
-local ACCOUNT_TIME_MAX = 2400   
-local ROLL_MARGIN      = 60     
-local MIN_VALID_P      = 1200   
-local ROT_MAX_STEP     = 180    
-local SLACK_DECAY      = 1800   
-local SESSION_GRACE    = 180     
-local PREFERRED_TEAM   = "Pirates"  
+function WH.url(target)
+    local u = CFG.WEBHOOKS[target]
+    if type(u) ~= "string" or u == "" or u == "REPLACE_ME" then return nil end
+    return u
+end
+function WH.pending() local n = 0 for _, q in pairs(WH.queues) do n = n + #q end return n end
 
-local HIGH_TIER = { 
-    "dragon", "leopard", "kitsune", "dough", "venom", "shadow", "control", "spirit", 
-    "mammoth", "t-rex", "trex", "gas", "yeti", "tiger", "magnet", "celestial", "oni",
-    "crimson", "skins", "gold", "kitsune", "east", "west", 
-    "buddha", "portal", "rumble", "lightning", "phoenix", "blizzard", "gravity", 
-    "pain", "love", "spider", "sound", "soul", "quake", "creation" 
-}
-
-local Players, RS, RunService = game:GetService("Players"), game:GetService("ReplicatedStorage"), game:GetService("RunService")
-local HttpService, VirtualUser = game:GetService("HttpService"), game:GetService("VirtualUser")
-local LP = Players.LocalPlayer
-repeat task.wait(1) until game:IsLoaded()
-local PG = LP:WaitForChild("PlayerGui")
-local Remotes = RS:WaitForChild("Remotes")
-local env = getgenv()
-
-local UID       = tostring(LP.UserId)
-local LAST_FILE = "GachaLast_" .. GROUP_ID .. "_" .. UID .. ".txt"
-local SESSION_FILE = "SessionEnd_" .. GROUP_ID .. "_" .. UID .. ".txt"
-
-if env.BloxSM and env.BloxSM.Unload then pcall(env.BloxSM.Unload) end
-local S = { alive = true, started = false, nextRoll = 0, fails = 0, lastStatus = "", conns = {}, sessionEnd = 0, signaled = false, farmStopped = false, farmTries = 0, farmRetryAt = 0 }
-env.BloxSM = { Unload = function() S.alive = false end }
-
-local gui = Instance.new("ScreenGui")
-gui.Name = "BloxFactoryUI" gui.ResetOnSpawn = false gui.DisplayOrder = 999
-local frame = Instance.new("Frame", gui)
-frame.Size = UDim2.new(0, 230, 0, 32) frame.Position = UDim2.new(0, 6, 0, 40)
-frame.BackgroundColor3 = Color3.fromRGB(25, 25, 30) frame.BackgroundTransparency = 0.2
-Instance.new("UICorner", frame).CornerRadius = UDim.new(0, 8)
-local btn = Instance.new("TextButton", frame)
-btn.Size = UDim2.new(1, -16, 0, 30) btn.Position = UDim2.new(0, 8, 0, 6)
-btn.BackgroundColor3 = Color3.fromRGB(60, 160, 90) btn.Text = "START"
-btn.TextColor3 = Color3.new(1, 1, 1) btn.Font = Enum.Font.GothamBold btn.TextSize = 14
-btn.Visible = false
-local lbl = Instance.new("TextLabel", frame)
-lbl.Size = UDim2.new(1, -16, 0, 22) lbl.Position = UDim2.new(0, 8, 0, 5) lbl.BackgroundTransparency = 1
-lbl.TextColor3 = Color3.new(1, 1, 1) lbl.TextSize = 12 lbl.Font = Enum.Font.Gotham
-lbl.TextXAlignment = Enum.TextXAlignment.Left lbl.Text = "Menunggu spawn..."
-pcall(function() local old = PG:FindFirstChild("BloxFactoryUI") if old then old:Destroy() end gui.Parent = PG end)
-local function SetStatus(t)
-    if t ~= S.lastStatus then S.lastStatus = t lbl.Text = t print("[BloxSM] " .. t) end
+function WH.send(target, title, desc, color, prio)
+    if not WH.url(target) then return false end
+    local q = WH.queues[target]
+    if not q then return false end
+    if #q >= CFG.WH_QUEUE_MAX then
+        local idx = 1
+        for i, it in ipairs(q) do if it.prio < 2 then idx = i break end end
+        table.remove(q, idx)
+    end
+    q[#q + 1] = {
+        prio = prio or 1, tries = 0, notBefore = 0,
+        payload = { username = "Fruit Factory", embeds = { {
+            title = title, description = desc, color = color,
+            footer = { text = "Account: " .. LP.Name }, timestamp = os.date("!%Y-%m-%dT%H:%M:%SZ") } } },
+    }
+    WH.dirty = true
+    return true
 end
 
-local GuiService, VIM = game:GetService("GuiService"), game:GetService("VirtualInputManager")
-local TEAM = (PREFERRED_TEAM == "Marines") and "Marines" or "Pirates"
-local STEM = (TEAM == "Pirates") and "pirate" or "marin"
-local bootClock = os.clock()
+local function headerGet(h, name)
+    if type(h) ~= "table" then return nil end
+    for k, v in pairs(h) do if string.lower(tostring(k)) == name then return v end end
+end
+function WH.post(url, payload)
+    local req = (syn and syn.request) or request or http_request
+    if not req then return nil end
+    local ok, res = pcall(req, { Url = url, Method = "POST", Headers = { ["Content-Type"] = "application/json" },
+        Body = HttpService:JSONEncode(payload) })
+    if not ok or type(res) ~= "table" then return nil end
+    local status = tonumber(res.StatusCode or res.Status)
+    local retry
+    if status == 429 then
+        retry = tonumber(headerGet(res.Headers, "retry-after"))
+        if not retry then
+            local okj, b = pcall(HttpService.JSONDecode, HttpService, res.Body or "{}")
+            if okj and type(b) == "table" then retry = tonumber(b.retry_after) end
+        end
+        if retry and retry > 600 then retry = retry / 1000 end
+    end
+    return status, retry
+end
 
-local function ClickButton(b)
+function WH.saveOutbox()
+    WH.dirty = false
+    local keep = {}
+    for target, q in pairs(WH.queues) do
+        for _, it in ipairs(q) do
+            if it.prio >= 2 and #keep < 20 then keep[#keep + 1] = { target = target, payload = it.payload } end
+        end
+    end
+    if #keep == 0 then FS.delete(WH.outbox) else FS.writeJSON(WH.outbox, keep) end
+end
+function WH.loadOutbox()
+    local d = FS.readJSON(WH.outbox)
+    if not d then return end
+    for _, it in ipairs(d) do
+        if type(it) == "table" and WH.queues[it.target] and type(it.payload) == "table" and WH.url(it.target) then
+            table.insert(WH.queues[it.target], { prio = 2, tries = 0, notBefore = 0, payload = it.payload })
+        end
+    end
+    Log.add("I", "outbox restored: " .. WH.pending() .. " message(s)")
+end
+
+function WH.pump()
+    local now = os.time()
+    local el = os.clock() - WH.lastRefill
+    WH.lastRefill = os.clock()
+    for t in pairs(WH.tokens) do WH.tokens[t] = math.min(CFG.WH_BURST, WH.tokens[t] + el * CFG.WH_PER_MIN / 60) end
+    for target, q in pairs(WH.queues) do
+        local item = q[1]
+        if item and now >= item.notBefore and WH.tokens[target] >= 1 then
+            local holdFile = "BloxWHHold_" .. target .. ".txt"
+            local hold = tonumber(FS.read(holdFile)) or 0
+            local url = WH.url(target)
+            if not url then
+                table.remove(q, 1)
+            elseif now >= hold then
+                WH.tokens[target] = WH.tokens[target] - 1
+                local status, retry = WH.post(url, item.payload)
+                if status and status >= 200 and status < 300 then
+                    table.remove(q, 1)
+                    WH.dirty = true
+                elseif status == 429 then
+                    local wait = (retry or 5) + math.random() * 2
+                    FS.write(holdFile, tostring(math.ceil(os.time() + wait)))
+                    item.notBefore = os.time() + wait
+                    item.tries = item.tries + 1
+                elseif status and status >= 400 and status < 500 then
+                    table.remove(q, 1)
+                    Log.add("W", "webhook " .. target .. " rejected with HTTP " .. status .. ", message dropped")
+                    WH.dirty = true
+                else
+                    item.tries = item.tries + 1
+                    item.notBefore = os.time() + math.min(300, 5 * 2 ^ item.tries)
+                end
+                if item.tries >= CFG.WH_MAX_TRIES and q[1] == item then
+                    table.remove(q, 1)
+                    Log.add("W", "webhook " .. target .. ": gave up after " .. item.tries .. " tries")
+                    WH.dirty = true
+                end
+            end
+        end
+    end
+    if WH.dirty then WH.saveOutbox() end
+    return 1
+end
+
+----------------------------------------------------------------
+-- 4. GROUP LOCK (async)
+----------------------------------------------------------------
+Group.token = string.sub((HttpService:GenerateGUID(false):gsub("%-", "")), 1, 16)
+Group.id, Group.num, Group.ready, Group.lockOk, Group.lost, Group.seq = nil, nil, false, false, false, 0
+Group.waiters, Group.changeHooks, Group.acquiring, Group.provisionalUsed = {}, {}, false, nil
+Group.homePath = "BloxHome_" .. UID .. ".txt"
+
+local function lockPath(n) return "Lock_" .. n .. ".txt" end
+function Group.readLock(n)
+    local d = FS.read(lockPath(n))
+    if not d then return nil end
+    local uid, token, seq, ts = string.match(d, "^(%d+)|(%x+)|(%d+)|(%d+)")
+    if not uid then return nil end
+    return { uid = uid, token = token, seq = tonumber(seq), ts = tonumber(ts) }
+end
+function Group.writeLock(n, seq, ts) FS.write(lockPath(n), UID .. "|" .. Group.token .. "|" .. seq .. "|" .. (ts or os.time())) end
+
+function Group.currentId()
+    if Group.id then return Group.id end
+    local home = tonumber(FS.read(Group.homePath))
+    local id = "Group" .. ((home and home >= 1 and home <= CFG.MAX_GROUPS) and home or 1)
+    Group.provisionalUsed = id
+    return id
+end
+function Group.whenReady(fn) if Group.ready then Task.spawn("group-waiter", fn) else Group.waiters[#Group.waiters + 1] = fn end end
+
+local function tryClaim(n)
+    Group.writeLock(n, 0)
+    task.wait(1 + math.random())
+    local L = Group.readLock(n)
+    if L and L.token == Group.token then
+        task.wait(1)
+        L = Group.readLock(n)
+        if L and L.token == Group.token then return true end
+    end
+    return false
+end
+
+function Group.pickSlot()
+    if not FS.ok() then return 1, false end
+    local now = os.time()
+    local home = tonumber(FS.read(Group.homePath))
+    local order = {}
+    if home and home >= 1 and home <= CFG.MAX_GROUPS then order[#order + 1] = home end
+    for n = 1, CFG.MAX_GROUPS do if n ~= home then order[#order + 1] = n end end
+    local free, fresh = {}, {}
+    for _, n in ipairs(order) do
+        local L = Group.readLock(n)
+        if (not L) or now - L.ts > CFG.LOCK_STALE then free[#free + 1] = n else fresh[#fresh + 1] = { n = n, seq = L.seq } end
+    end
+    if home and free[1] == home and tryClaim(home) then return home, true end
+    if #fresh > 0 then
+        task.wait(CFG.PROBE_WAIT)
+        local usable = {}
+        for _, n in ipairs(free) do usable[n] = true end
+        for _, f in ipairs(fresh) do
+            local L = Group.readLock(f.n)
+            if (not L) or L.seq == f.seq then usable[f.n] = true end
+        end
+        free = {}
+        for _, n in ipairs(order) do if usable[n] then free[#free + 1] = n end end
+    end
+    for _, n in ipairs(free) do
+        if tryClaim(n) then return n, true end
+    end
+    return 1, false
+end
+
+function Group.acquire()
+    if Group.acquiring then return end
+    Group.acquiring = true
+    Task.spawn("group-acquire", function()
+        local oldId = Group.id
+        local n, ok = Group.pickSlot()
+        Group.num, Group.lockOk, Group.lost, Group.seq = n, ok, false, 0
+        Group.id = "Group" .. n
+        if ok then FS.write(Group.homePath, tostring(n)) end
+        Group.acquiring = false
+        Log.add(ok and "I" or "W", "group " .. Group.id .. (ok and "" or " (NO LOCK - state may collide with other tabs)"))
+        local prev = oldId or Group.provisionalUsed
+        if prev and prev ~= Group.id then for _, fn in ipairs(Group.changeHooks) do pcall(fn, prev, Group.id) end end
+        if not Group.ready then
+            Group.ready = true
+            for _, fn in ipairs(Group.waiters) do Task.spawn("group-waiter", fn) end
+            Group.waiters = {}
+        end
+    end)
+end
+
+function Group.refresh()
+    if not Group.ready or not Group.lockOk or Group.acquiring then return end
+    local L = Group.readLock(Group.num)
+    if L == nil or L.token == Group.token then
+        Group.seq = Group.seq + 1
+        Group.writeLock(Group.num, Group.seq)
+    else
+        Group.lost = true
+        Log.add("W", "lock on " .. Group.id .. " was taken by another instance, re-acquiring")
+        Group.acquire()
+    end
+end
+function Group.release()
+    if Group.ready and Group.lockOk and Group.num then
+        local L = Group.readLock(Group.num)
+        if L and L.token == Group.token then Group.writeLock(Group.num, Group.seq, 0) end
+    end
+end
+
+----------------------------------------------------------------
+-- 5. STATE STORE
+----------------------------------------------------------------
+Store.path = "BloxState_" .. UID .. ".json"
+Store.data = { lastRoll = 0, bootCount = 0, rolls = 0, highTier = 0 }
+Store.dirty = false
+function Store.set(k, v) Store.data[k] = v Store.dirty = true end
+function Store.load()
+    local d = FS.readJSON(Store.path)
+    if d then for k, v in pairs(Store.data) do if type(d[k]) == type(v) then Store.data[k] = d[k] end end end
+    if Store.data.lastRoll == 0 then
+        local best = 0
+        for n = 0, CFG.MAX_GROUPS do
+            local p = (n == 0) and ("GachaLast_" .. UID .. ".txt") or ("GachaLast_Group" .. n .. "_" .. UID .. ".txt")
+            local t = tonumber(FS.read(p))
+            if t and t > best then best = t end
+        end
+        if best > 0 then Store.data.lastRoll = best Log.add("I", "migrated last roll time from v19 files") end
+    end
+    Store.data.bootCount = Store.data.bootCount + 1
+    Store.dirty = true
+end
+function Store.save(force)
+    if not (Store.dirty or force) then return end
+    Store.dirty = false
+    FS.writeJSON(Store.path, Store.data)
+end
+
+----------------------------------------------------------------
+-- 6. ROTATION + SESSION
+----------------------------------------------------------------
+function Rot.path() return "RotationState_" .. Group.currentId() .. ".txt" end
+function Rot.accPath() return "RotAcc_" .. Group.currentId() .. "_" .. UID .. ".txt" end
+function Rot.load()
+    local st = { t = CFG.SESSION_BASE, adj = 0, exit = 0, exit_by = "", oh = 90, n = 0 }
+    local d = FS.readJSON(Rot.path())
+    if d then for k, v in pairs(st) do if type(d[k]) == type(v) then st[k] = d[k] end end end
+    st.t = clamp(st.t, CFG.SESSION_BASE, CFG.SESSION_MAX)
+    return st
+end
+function Rot.save(st) FS.writeJSON(Rot.path(), st) end
+function Rot.markExit() local st = Rot.load() st.exit, st.exit_by = os.time(), LP.Name Rot.save(st) end
+
+function Rot.learn(now)
+    local st = Rot.load()
+    local accStart = tonumber(FS.read(Rot.accPath()))
+    local P = accStart and (now - accStart) or nil
+    local gap = st.exit > 0 and (now - st.exit) or nil
+    if gap and st.exit_by ~= LP.Name and gap > 0 and gap < 900 then
+        st.oh = math.floor(0.8 * st.oh + 0.2 * gap)
+    end
+    if P and Store.data.lastRoll > 0 and P >= CFG.MIN_VALID_P then
+        st.n = st.n + 1
+        local boot = st.n <= CFG.BOOTSTRAP_CYCLES
+        local alive = clamp(math.floor(P / (st.t + st.oh) + 0.5), 1, CFG.MAX_GROUPS)
+        local epoch = alive * (st.t + st.oh)
+        local cooled = boot or (now - st.adj) >= 0.8 * epoch
+        local R = (Store.data.lastRoll + CFG.ROLL_INTERVAL) - now + CFG.ROLL_MARGIN
+        local step = boot and CFG.ROT_MAX_STEP * 2 or CFG.ROT_MAX_STEP
+        if R > 0 then
+            if st.t >= CFG.SESSION_MAX then
+                Log.add("W", "gacha cooldown not over (" .. R .. "s) but session length is already at the maximum")
+            elseif cooled then
+                local old = st.t
+                st.t = math.min(CFG.SESSION_MAX, st.t + math.min(step, math.ceil(R / alive)))
+                st.adj = now
+                Log.add("W", string.format("rotation too short (~%d live accounts, short %ds): session %.1f -> %.1f min",
+                    alive, R, old / 60, st.t / 60))
+            end
+        elseif not boot and R < -CFG.SLACK_DECAY and st.t > CFG.SESSION_BASE and cooled then
+            local old = st.t
+            st.t = math.max(CFG.SESSION_BASE, st.t - 60)
+            st.adj = now
+            Log.add("I", string.format("rotation loose: session %.1f -> %.1f min", old / 60, st.t / 60))
+        end
+    end
+    Rot.save(st)
+    FS.write(Rot.accPath(), tostring(now))
+    return st.t
+end
+
+Sess.active, Sess.endAt, Sess.startedAt, Sess.signaledAt, Sess.rejoinTried = false, 0, 0, nil, false
+function Sess.filePath(id) return "SessionEnd_" .. (id or Group.currentId()) .. "_" .. UID .. ".txt" end
+function Sess.signalPath() return LP.Name .. "_winterswap.json" end
+
+function Sess.findExisting()
+    local t = tonumber(FS.read(Sess.filePath()))
+    if t then return t end
+    local bestT, bestId
+    for n = 1, CFG.MAX_GROUPS do
+        local id = "Group" .. n
+        local v = tonumber(FS.read(Sess.filePath(id)))
+        if v and (not bestT or v > bestT) then bestT, bestId = v, id end
+    end
+    if bestT then
+        FS.write(Sess.filePath(), tostring(bestT))
+        FS.delete(Sess.filePath(bestId))
+        Log.add("I", "session file moved from " .. bestId .. " to " .. Group.currentId())
+    end
+    return bestT
+end
+function Sess.migrate(oldId, newId)
+    if Sess.endAt > 0 then
+        FS.write(Sess.filePath(newId), tostring(Sess.endAt))
+        FS.delete(Sess.filePath(oldId))
+        Log.add("I", "session file migrated " .. oldId .. " -> " .. newId)
+    end
+end
+
+function Sess.resetCounters()
+    Farm.reset() Sea.reset() Gacha.resetSession()
+    Dead.reason, Dead.noCharSince = nil, nil
+    Sess.signaledAt, Sess.rejoinTried = nil, false
+end
+
+function Sess.start()
+    if Sess.active then return end
+    local now = os.time()
+    local endAt = Sess.findExisting()
+    local fresh = true
+    if endAt then
+        if now < endAt then fresh = false Log.add("I", "resuming session, " .. math.ceil((endAt - now) / 60) .. " min left")
+        elseif now - endAt <= CFG.SESSION_GRACE then fresh = false Log.add("I", "session just expired, signalling") end
+    end
+    if fresh then
+        endAt = now + Rot.learn(now)
+        FS.write(Sess.filePath(), tostring(endAt))
+        FS.delete(Sess.signalPath())
+        Log.add("I", "new session, " .. math.floor((endAt - now) / 60) .. " min")
+    end
+    Sess.resetCounters()
+    Sess.endAt, Sess.startedAt, Sess.active = endAt, now, true
+    UI.showButton(false)
+end
+function Sess.stop() Sess.active = false UI.showButton(true) UI.status("Stopped manually") end
+
+function Sess.signal(reason)
+    if Sess.signaledAt then return end
+    Sess.signaledAt = os.time()
+    FS.write(Sess.signalPath(), '{"status":"done"}')
+    Rot.markExit()
+    Log.add("I", "session end signal written (" .. reason .. ")")
+    UI.status("Done (" .. reason .. "), waiting for account switch")
+end
+
+function Sess.guard()
+    if not Sess.active then return 3 end
+    local now = os.time()
+    if not Sess.signaledAt then
+        if Dead.reason then Sess.signal("dead: " .. Dead.reason)
+        elseif now >= Sess.endAt then Sess.signal("timeout") end
+    else
+        if now - Sess.signaledAt >= CFG.RESIGNAL_AFTER and FS.exists(Sess.signalPath()) then
+            FS.write(Sess.signalPath(), '{"status":"done"}')
+            Sess.signaledAt = now
+            Log.add("W", "signal file not consumed, refreshed")
+        end
+        if Dead.reason and CFG.AUTO_REJOIN and not Sess.rejoinTried and now - Sess.signaledAt >= CFG.REJOIN_AFTER then
+            Sess.rejoinTried = true
+            Log.add("W", "still alive after dead-session signal, trying to rejoin")
+            pcall(function() TeleportService:Teleport(game.PlaceId, LP) end)
+        end
+    end
+    return 3
+end
+
+----------------------------------------------------------------
+-- 7. DEAD-SESSION DETECTION
+----------------------------------------------------------------
+Dead.reason, Dead.noCharSince = nil, nil
+function Dead.mark(r)
+    if Dead.reason then return end
+    Dead.reason = r
+    Log.add("E", "dead session: " .. r)
+    WH.send("report", "Dead session", "Account " .. LP.Name .. ": " .. r, 16711680, 1)
+end
+function Dead.watch()
+    if not Sess.active or Sess.signaledAt then Dead.noCharSince = nil return 10 end
+    if hasHRP() then Dead.noCharSince = nil
+    else
+        Dead.noCharSince = Dead.noCharSince or os.clock()
+        if os.clock() - Dead.noCharSince > CFG.DEAD_NO_CHAR then Dead.mark("no character for " .. CFG.DEAD_NO_CHAR .. "s") end
+    end
+    return 10
+end
+
+----------------------------------------------------------------
+-- 8. VXEZE LOADER
+----------------------------------------------------------------
+local CONFLICT_KEYWORDS = { "hop", "rejoin", "load script", "webhook", "spam join", "store fruit", "reset character", "white screen", "black screen" }
+local function words(s) return " " .. (string.lower(tostring(s)):gsub("[^%w]+", " ")) .. " " end
+local function hasWord(key, kw) return string.find(words(key), words(kw), 1, true) ~= nil end
+
+function Vx.sanitize(cfg)
+    local n = 0
+    for k, v in pairs(cfg) do
+        if type(k) == "string" and v == true then
+            for _, kw in ipairs(CONFLICT_KEYWORDS) do
+                if hasWord(k, kw) then cfg[k] = false n = n + 1 break end
+            end
+        end
+    end
+    if type(cfg["Webhook"]) == "table" then cfg["Webhook"]["Enable"] = false end
+    return n
+end
+function Vx.applyOverrides(cfg)
+    cfg["Start Farm"], cfg["Remove Notifications"] = true, true
+    for _, k in ipairs(CFG.NOTI_DISABLE_KEYS) do if type(cfg[k]) == "boolean" then cfg[k] = false end end
+end
+
+Vx.mode, Vx.level, Vx.loaded, Vx.failed, Vx.running, Vx.attempts, Vx.reloads = nil, nil, false, false, false, 0, 0
+function Vx.readLevel()
+    local ok, v = pcall(function()
+        local d = LP:FindFirstChild("Data")
+        local l = d and d:FindFirstChild("Level")
+        return l and tonumber(l.Value)
+    end)
+    return ok and v or nil
+end
+function Vx.load()
+    local delay = 5
+    for attempt = 1, CFG.VX_MAX_ATTEMPTS do
+        if not S.alive then return false end
+        Vx.attempts, Vx.running = attempt, true
+        local ok, err = pcall(function()
+            local fn, cerr = loadstring(game:HttpGet(CFG.VXEZE_URL))
+            if not fn then error(cerr or "compile failed") end
+            fn()
+        end)
+        if ok then
+            Vx.loaded, Vx.loadedAt = true, os.time()
+            Log.add("I", "Vxeze loaded (attempt " .. attempt .. ")")
+            return true
+        end
+        Log.add("W", "Vxeze load failed (attempt " .. attempt .. "): " .. tostring(err))
+        task.wait(delay)
+        delay = math.min(120, delay * 2)
+    end
+    Vx.failed = true
+    Log.add("E", "Vxeze could not be loaded, giving up")
+    WH.send("report", "Vxeze load failed", "Account " .. LP.Name .. " could not load the hub", 16711680, 1)
+    return false
+end
+function Vx.boot()
+    Task.spawn("vxeze-boot", function()
+        local lv = Vx.readLevel()
+        while not lv and S.alive do task.wait(3) lv = Vx.readLevel() end
+        if not S.alive then return end
+        local cfg, mode
+        if lv >= CFG.LEVEL_VXEZE_MIN then cfg, mode = GetVxezeConfig(), "beli" else cfg, mode = GetVxezeLevelConfig(), "leveling" end
+        local removed = Vx.sanitize(cfg)
+        Vx.applyOverrides(cfg)
+        Vx.mode, Vx.level = mode, lv
+        env.Config = cfg
+        env.BloxSea = { sea = ({ [2753915549] = 1, [4442272183] = 2, [7449423635] = 3 })[game.PlaceId], level = lv, mode = mode }
+        Log.add("I", "level " .. lv .. " -> mode " .. mode .. " (" .. removed .. " conflicting features disabled)")
+        Noti.installHook()
+        Vx.load()
+    end)
+end
+
+----------------------------------------------------------------
+-- 9. NOTIFICATION FILTER
+----------------------------------------------------------------
+function Noti.match(text)
+    local t = string.lower(tostring(text or ""))
+    for _, p in ipairs(CFG.NOTI_PATTERNS) do if string.find(t, p, 1, true) then return true end end
+    return false
+end
+function Noti.installHook()
+    env.BloxNotiRule = function(name, data)
+        if name == "SendNotification" then
+            local txt = type(data) == "table" and (data.Text or data.Title) or data
+            return CFG.NOTI_BLOCK_ALL or Noti.match(txt)
+        elseif name == "ChatMakeSystemMessage" then
+            return Noti.match(type(data) == "table" and data.Text or data)
+        end
+        return false
+    end
+    if env.BloxNotiHooked then return end
+    if type(hookfunction) ~= "function" or type(newcclosure) ~= "function" then Log.add("W", "hookfunction unavailable, GUI sweep only") return end
+    local SG = game:GetService("StarterGui")
+    local ok, err = pcall(function()
+        local old
+        old = hookfunction(SG.SetCore, newcclosure(function(self, name, data)
+            local rule = env.BloxNotiRule
+            if rule and rule(name, data) then return end
+            return old(self, name, data)
+        end))
+    end)
+    if ok then env.BloxNotiHooked = true else Log.add("W", "notification hook failed: " .. tostring(err)) end
+end
+
+Noti.SKIP_GUI = { RobloxGui = true, PlayerList = true, Chat = true, TopBarApp = true, BubbleChat = true, PurchasePrompt = true,
+    ThemeProvider = true, ControlGui = true, TouchGui = true, Main = true, BloxFactoryUI = true,
+    RobloxNetworkPauseNotification = true, DevConsoleMaster = true, ScreenshotHud = true }
+
+function Noti.check(d)
+    if not d:IsA("GuiObject") or d:IsA("GuiButton") or not d.Visible then return end
+    local n = string.lower(d.Name)
+    for _, k in ipairs(CFG.NOTI_NAME_KEYS) do
+        if string.find(n, k, 1, true) then d.Visible = false return end
+    end
+    if d:IsA("TextLabel") then
+        local t = string.lower(d.Text)
+        if string.sub(t, 1, 5) == "kill " and (string.find(t, "[", 1, true) or string.sub(t, -3) == "...") then d.Visible = false end
+    end
+end
+function Noti.attach(g)
+    if not g:IsA("ScreenGui") or Noti.SKIP_GUI[g.Name] then return end
+    local ok, c = pcall(function()
+        return g.DescendantAdded:Connect(function(d)
+            Noti.check(d)
+            if d:IsA("TextLabel") then task.delay(0.2, function() pcall(Noti.check, d) end) end
+        end)
+    end)
+    if ok then S.conns[#S.conns + 1] = c end
+    Task.spawn("noti-initial", function()
+        local i = 0
+        for _, d in ipairs(g:GetDescendants()) do
+            i = i + 1
+            if i % 300 == 0 then task.wait() end
+            pcall(Noti.check, d)
+        end
+    end)
+end
+function Noti.boot()
+    local roots = { PG }
+    local okh, hui = pcall(function() return gethui and gethui() end)
+    if okh and hui then roots[#roots + 1] = hui end
+    pcall(function() roots[#roots + 1] = game:GetService("CoreGui") end)
+    for _, root in ipairs(roots) do
+        for _, g in ipairs(root:GetChildren()) do Noti.attach(g) end
+        local ok, c = pcall(function() return root.ChildAdded:Connect(Noti.attach) end)
+        if ok then S.conns[#S.conns + 1] = c end
+    end
+end
+
+----------------------------------------------------------------
+-- 10. INPUT HELPERS
+----------------------------------------------------------------
+function Input.click(b)
     if not b then return false end
     local fired = false
     if type(getconnections) == "function" then
@@ -780,9 +759,7 @@ local function ClickButton(b)
             local ok, sig = pcall(function() return b[sn] end)
             if ok and sig then
                 local ok2, cs = pcall(getconnections, sig)
-                if ok2 then for _, c in ipairs(cs) do
-                    if pcall(function() c:Fire() end) then fired = true end
-                end end
+                if ok2 then for _, c in ipairs(cs) do if pcall(function() c:Fire() end) then fired = true end end end
             end
         end
     end
@@ -793,9 +770,19 @@ local function ClickButton(b)
     end
     return fired
 end
-
-local function HasHRP() local c = LP.Character return (c and c:FindFirstChild("HumanoidRootPart")) and true or false end
-local function Shown(g)
+function Input.vim(b, mode)
+    local sg = b:FindFirstAncestorOfClass("ScreenGui")
+    local inset = (sg and sg.IgnoreGuiInset) and Vector2.zero or GuiService:GetGuiInset()
+    local p = b.AbsolutePosition + b.AbsoluteSize / 2 + inset
+    pcall(function()
+        if mode == "mouse" then
+            VIM:SendMouseButtonEvent(p.X, p.Y, 0, true, game, 0) task.wait(0.08) VIM:SendMouseButtonEvent(p.X, p.Y, 0, false, game, 0)
+        else
+            VIM:SendTouchEvent(1, 0, p.X, p.Y) task.wait(0.08) VIM:SendTouchEvent(1, 2, p.X, p.Y)
+        end
+    end)
+end
+function Input.shown(g)
     local cur = g
     while cur and cur ~= PG do
         if cur:IsA("GuiObject") and not cur.Visible then return false end
@@ -804,37 +791,44 @@ local function Shown(g)
     end
     return true
 end
-local cachedCt, lastScan = nil, 0
-local function TeamUI()
+
+----------------------------------------------------------------
+-- 11. TEAM SELECTION
+----------------------------------------------------------------
+Team.NAME = (CFG.PREFERRED_TEAM == "Marines") and "Marines" or "Pirates"
+Team.STEM = (Team.NAME == "Pirates") and "pirate" or "marin"
+Team.cached, Team.lastScan, Team.lastTry, Team.fails, Team.doneStreak, Team.bootClock, Team.dumped = nil, 0, 0, 0, 0, os.clock(), false
+
+function Team.ui()
     local main = PG:FindFirstChild("Main")
     local ct = main and main:FindFirstChild("ChooseTeam")
-    if not ct and cachedCt and cachedCt.Parent then ct = cachedCt end
-    if not ct and os.clock() - lastScan >= 5 then
-        lastScan = os.clock()
+    if not ct and Team.cached and Team.cached.Parent then ct = Team.cached end
+    if not ct and os.clock() - Team.lastScan >= 5 then
+        Team.lastScan = os.clock()
         ct = PG:FindFirstChild("ChooseTeam", true)
         if not ct then
             for _, d in ipairs(PG:GetDescendants()) do
                 if d:IsA("TextLabel") and string.find(string.lower(d.Text), "pick a side", 1, true) then
                     ct = d
-                    while ct.Parent and ct.Parent ~= PG and not ct:FindFirstChild(TEAM, true) do ct = ct.Parent end
+                    while ct.Parent and ct.Parent ~= PG and not ct:FindFirstChild(Team.NAME, true) do ct = ct.Parent end
                     break
                 end
             end
         end
-        cachedCt = ct
+        Team.cached = ct
     end
     return ct
 end
-local function TeamDone()
+function Team.done()
     local t = LP.Team
     if t and (t.Name == "Pirates" or t.Name == "Marines") then return true end
-    local ct = TeamUI()
-    if ct then return not Shown(ct) end
-    return HasHRP()
+    local ct = Team.ui()
+    if ct then return not Input.shown(ct) end
+    return hasHRP()
 end
-local function FindTeamButton(ct)
+function Team.findButton(ct)
     local c = ct:FindFirstChild("Container") or ct
-    local t = c:FindFirstChild(TEAM) or ct:FindFirstChild(TEAM, true)
+    local t = c:FindFirstChild(Team.NAME) or ct:FindFirstChild(Team.NAME, true)
     if t then
         local f = t:FindFirstChild("Frame")
         local b = f and f:FindFirstChild("TextButton")
@@ -847,18 +841,17 @@ local function FindTeamButton(ct)
         if d:IsA("GuiButton") then
             local p, hit = d, false
             for _ = 1, 4 do
-                if p and p ~= ct and string.find(string.lower(p.Name), STEM, 1, true) then hit = true break end
+                if p and p ~= ct and string.find(string.lower(p.Name), Team.STEM, 1, true) then hit = true break end
                 p = p and p.Parent
             end
-            if not hit and d:IsA("TextButton") and string.find(string.lower(d.Text), STEM, 1, true) then hit = true end
+            if not hit and d:IsA("TextButton") and string.find(string.lower(d.Text), Team.STEM, 1, true) then hit = true end
             if hit then return d end
         end
     end
 end
-local dumped = false
-local function DumpTeamDebug()
-    if dumped or type(writefile) ~= "function" then return end
-    dumped = true
+function Team.dump()
+    if Team.dumped or not FS.ok() then return end
+    Team.dumped = true
     local out = {}
     for _, d in ipairs(PG:GetDescendants()) do
         local txt = (d:IsA("TextLabel") or d:IsA("TextButton")) and d.Text or ""
@@ -867,209 +860,86 @@ local function DumpTeamDebug()
             out[#out + 1] = d:GetFullName() .. " [" .. d.ClassName .. "] " .. txt
         end
     end
-    pcall(writefile, "TeamDebug_" .. UID .. ".txt", table.concat(out, "\n"))
+    FS.write("TeamDebug_" .. UID .. ".txt", table.concat(out, "\n"))
 end
-local function ViaVIM(b, mode)
-    local sg = b:FindFirstAncestorOfClass("ScreenGui")
-    local inset = (sg and sg.IgnoreGuiInset) and Vector2.zero or GuiService:GetGuiInset()
-    local p = b.AbsolutePosition + b.AbsoluteSize / 2 + inset
-    pcall(function()
-        if mode == "mouse" then
-            VIM:SendMouseButtonEvent(p.X, p.Y, 0, true, game, 0) task.wait(0.08)
-            VIM:SendMouseButtonEvent(p.X, p.Y, 0, false, game, 0)
-        else
-            VIM:SendTouchEvent(1, 0, p.X, p.Y) task.wait(0.08)
-            VIM:SendTouchEvent(1, 2, p.X, p.Y)
-        end
-    end)
-end
-local function TrySelectTeam()
-    SetStatus("Pilih team: " .. TEAM)
-    pcall(function() Remotes.CommF_:InvokeServer("SetTeam", TEAM) end)
+function Team.try()
+    UI.status("Choosing team: " .. Team.NAME)
+    local cf = commF()
+    if cf then pcall(function() cf:InvokeServer("SetTeam", Team.NAME) end) end
     task.wait(1.5)
-    if TeamDone() then return true, "remote" end
-    local ct = TeamUI()
-    local b = ct and FindTeamButton(ct)
-    if not b then DumpTeamDebug() return false end
-    ClickButton(b) task.wait(1)
-    if TeamDone() then return true, "getconnections" end
-    ViaVIM(b, "mouse") task.wait(1.2)
-    if TeamDone() then return true, "vim-mouse" end
-    ViaVIM(b, "touch") task.wait(1.2)
-    if TeamDone() then return true, "vim-touch" end
+    if Team.done() then return true, "remote" end
+    local ct = Team.ui()
+    local b = ct and Team.findButton(ct)
+    if not b then Team.dump() return false end
+    Input.click(b) task.wait(1)
+    if Team.done() then return true, "getconnections" end
+    Input.vim(b, "mouse") task.wait(1.2)
+    if Team.done() then return true, "vim-mouse" end
+    Input.vim(b, "touch") task.wait(1.2)
+    if Team.done() then return true, "vim-touch" end
     return false
 end
-
-local lastTry, teamFails = 0, 0
-task.spawn(function()
-    while S.alive do
-        pcall(function()
-            local ct = TeamUI()
-            local need = (ct and Shown(ct)) or (LP.Team == nil and not HasHRP() and os.clock() - bootClock > 20)
-            local cd = math.min(30, 5 * 2 ^ teamFails)
-            if need and os.clock() - lastTry >= cd then
-                lastTry = os.clock()
-                local ok, how = TrySelectTeam()
-                if ok then teamFails = 0 SetStatus("Team dipilih (" .. how .. "): " .. TEAM)
-                else teamFails += 1 SetStatus("Pilih team gagal #" .. teamFails) end
-            end
-        end)
-        task.wait(1)
+function Team.tick()
+    if Team.done() and hasHRP() then
+        Team.doneStreak = Team.doneStreak + 1
+        if Team.doneStreak >= 3 then return false end
+        return 1
     end
-end)
-
-local function IsHighTier(name)
-    local l = string.lower(tostring(name))
-    for _, k in ipairs(HIGH_TIER) do if string.find(l, k, 1, true) then return true end end
-    return false
-end
-
-local function formatNum(n)
-    n = tonumber(n) or 0
-    local formatted = string.format("%d", math.floor(n))
-    while true do
-        local i
-        formatted, i = formatted:gsub("^(-?%d+)(%d%d%d)", "%1,%2")
-        if i == 0 then break end
+    Team.doneStreak = 0
+    local ct = Team.ui()
+    local need = (ct and Input.shown(ct)) or (LP.Team == nil and not hasHRP() and os.clock() - Team.bootClock > 20)
+    local cd = math.min(30, 5 * 2 ^ Team.fails)
+    if need and os.clock() - Team.lastTry >= cd then
+        Team.lastTry = os.clock()
+        local ok, how = Team.try()
+        if ok then Team.fails = 0 UI.status("Team chosen (" .. how .. ")") else Team.fails = Team.fails + 1 UI.status("Team selection failed #" .. Team.fails) end
     end
-    return formatted
+    return 1
 end
 
-local function GetBeli()
-    local ok, beli = pcall(function()
-        local data = LP:FindFirstChild("Data")
-        local beliVal = data and data:FindFirstChild("Beli")
-        if beliVal and beliVal:IsA("ValueBase") then return beliVal.Value end
-        return 0
-    end)
-    return ok and beli or 0
+----------------------------------------------------------------
+-- 12. FARM CONTROL
+----------------------------------------------------------------
+Farm.TEXTS    = { "mulai bertani", "start farming", "start farm" }
+Farm.PATTERNS = { "farm", "bertani" }
+Farm.ATTRS    = { "Value", "Toggled", "State", "Enabled", "On", "Active" }
+Farm.KEY      = "Start Farm"
+
+function Farm.reset()
+    Farm.onTries, Farm.onNext, Farm.warnAt = 0, 0, 0
+    Farm.stopTries, Farm.stopNext, Farm.stopped = 0, 0, false
+    Farm.scanBackoff, Farm.sw, Farm.row, Farm.seenUI = 5, nil, nil, false
 end
+Farm.reset()
 
-local function Snapshot()
-    local out = {}
-    for _, cont in ipairs({ LP:FindFirstChild("Backpack"), LP.Character }) do
-        if cont then
-            for _, it in ipairs(cont:GetChildren()) do
-                if it:IsA("Tool") then
-                    local n = it:GetAttribute("OriginalName") or it.Name
-                    out[n] = out[n] or { count = 0, tool = it }
-                    out[n].count += 1
-                end
-            end
-        end
-    end
-    return out
-end
-
-local function SendWebhook(url, title, desc, color)
-    if url == "" then return end
-    local req = (syn and syn.request) or request or http_request
-    if req then
-        local payload = {
-            username = "Fruit Factory",
-            embeds = {{
-                title = title,
-                description = desc,
-                color = color,
-                footer = { text = "Akun: " .. LP.Name },
-                timestamp = os.date("!%Y-%m-%dT%H:%M:%SZ")
-            }}
-        }
-        pcall(req, { Url = url, Method = "POST", Headers = { ["Content-Type"] = "application/json" }, Body = HttpService:JSONEncode(payload) })
-    end
-end
-
-local function RollFruit()
-    local ok, res = pcall(function() return Remotes.CommF_:InvokeServer("Cousin", "Buy") end)
-    if ok and res ~= nil and res ~= false then return res end
-    local ok2, res2 = pcall(function()
-        local net = RS:FindFirstChild("Modules") and RS.Modules:FindFirstChild("Net")
-        local rf = net and net:FindFirstChild("RF/GachaNetworkRF")
-        return rf and rf:InvokeServer({ Context = "Purchase", BoxName = "ZiolesGacha" })
-    end)
-    if ok2 and res2 ~= nil and res2 ~= false then return res2 end
-end
-
-local function DoRoll()
-    SetStatus("Roll gacha...")
-    local before = Snapshot()
-    RollFruit()
-    task.wait(2.5)
-    
-    local got = false
-    local rawBeli = GetBeli()
-    local currentBeli = formatNum(rawBeli)
-    
-    local isLowBeli = rawBeli < 5000000
-    local beliText = isLowBeli and ("⚠️ **LOW BELI:** " .. currentBeli) or ("Sisa Beli: " .. currentBeli)
-    local embedColor = isLowBeli and 16711680 or 3447003
-
-    for name, info in pairs(Snapshot()) do
-        if info.count > ((before[name] and before[name].count) or 0) then
-            got = true
-            if IsHighTier(name) then
-                SetStatus("HIGH TIER: " .. name .. " - simpan ke Chest")
-                pcall(function() Remotes.CommF_:InvokeServer("StoreFruit", name, info.tool) end)
-                task.wait(1)
-                local stored = not info.tool:IsDescendantOf(game)
-                SetStatus(stored and ("Tersimpan di Chest: " .. name) or ("STORE GAGAL (masih di tas): " .. name))
-                SendWebhook(WEBHOOK_FRUIT, "🔥 HIGH TIER OBTAINED 🔥",
-                    string.format("GOT A HIGH TIER: **%s** %s\n%s", name, stored and "(Stored in Chest)" or "(Store GAGAL - masih di Backpack)", beliText),
-                    isLowBeli and 16711680 or 16776960)
-            else
-                SetStatus("Item jelek diabaikan: " .. name)
-            end
-        end
-    end
-    
-    SendWebhook(WEBHOOK_BELI, "📊 Roll Report", string.format("Status: %s\n%s", got and "Dapet buah baru" or "Zonk/Cooldown", beliText), embedColor)
-
-    if got then
-        S.fails = 0
-        S.nextRoll = os.time() + ROLL_INTERVAL
-        if type(writefile) == "function" then pcall(writefile, LAST_FILE, tostring(os.time())) end
-    else
-        S.fails += 1
-        local delay = math.min(300, 45 * 2 ^ (S.fails - 1))
-        S.nextRoll = os.time() + delay
-        SetStatus("Belum dapat item (cooldown?), coba lagi " .. delay .. "s")
-    end
-end
-
-local FARM_STOP_BEFORE = 120
-local FARM_TEXTS    = { "mulai bertani", "start farming", "start farm" }
-local FARM_PATTERNS = { "farm", "bertani" }
-local ATTR_KEYS     = { "Value", "Toggled", "State", "Enabled", "On", "Active" }
-local SKIP_GUI = { RobloxGui = true, PlayerList = true, Chat = true, TopBarApp = true, BubbleChat = true,
-    PurchasePrompt = true, ThemeProvider = true, ControlGui = true, TouchGui = true, Main = true,
-    BloxFactoryUI = true, ["RobloxNetworkPauseNotification"] = true, DevConsoleMaster = true, ScreenshotHud = true }
-local farmSw, farmRow
-
-local function FarmTextMatch(s)
-    s = string.lower(s)
-    for _, t in ipairs(FARM_TEXTS) do if s:find(t, 1, true) then return true end end
-    return false
-end
-local function NameIsFarm(k)
-    k = string.lower(k)
-    for _, p in ipairs(FARM_PATTERNS) do if k:find(p, 1, true) then return true end end
-    return false
-end
-
-local function EnvFarmFlags()
+local function textMatch(s) s = string.lower(s) for _, t in ipairs(Farm.TEXTS) do if s:find(t, 1, true) then return true end end return false end
+local function nameIsFarm(k) k = string.lower(k) for _, p in ipairs(Farm.PATTERNS) do if k:find(p, 1, true) then return true end end return false end
+function Farm.envFlags()
     local list = {}
     for _, tbl in ipairs({ env, _G }) do
         local n = 0
         for k, v in next, tbl do
-            n += 1
+            n = n + 1
             if n > 1500 then break end
-            if type(k) == "string" and v == true and NameIsFarm(k) then list[#list + 1] = { tbl = tbl, key = k } end
+            if type(k) == "string" and v == true and nameIsFarm(k) then list[#list + 1] = { tbl = tbl, key = k } end
         end
     end
     return list
 end
-
-local function FarmRoots()
+function Farm.cfgOff(cfg)
+    local n = 0
+    pcall(function()
+        if cfg[Farm.KEY] ~= false then cfg[Farm.KEY] = false n = n + 1 end
+        local seen = 0
+        for k, v in next, cfg do
+            seen = seen + 1
+            if seen > 600 then break end
+            if type(k) == "string" and v == true and k ~= Farm.KEY and nameIsFarm(k) then cfg[k] = false n = n + 1 end
+        end
+    end)
+    return n
+end
+function Farm.roots()
     local roots = {}
     local ok, hui = pcall(function() return gethui and gethui() end)
     if ok and hui then roots[#roots + 1] = hui end
@@ -1077,14 +947,13 @@ local function FarmRoots()
     roots[#roots + 1] = PG
     return roots
 end
-
-local function ScanGui(g)
+function Farm.scanGui(g)
     local n = 0
     for _, d in ipairs(g:GetDescendants()) do
-        n += 1
+        n = n + 1
         if n % 400 == 0 then task.wait() end
         local cn = d.ClassName
-        if (cn == "TextLabel" or cn == "TextButton") and FarmTextMatch(d.Text) then
+        if (cn == "TextLabel" or cn == "TextButton") and textMatch(d.Text) then
             if cn == "TextButton" then return d, d.Parent or d end
             local a = d.Parent
             for _ = 1, 5 do
@@ -1102,29 +971,28 @@ local function ScanGui(g)
         end
     end
 end
-local function GetFarmToggle()
-    if farmSw and farmSw.Parent then return farmSw, farmRow end
-    farmSw, farmRow = nil, nil
+function Farm.toggle()
+    if Farm.sw and Farm.sw.Parent then return Farm.sw, Farm.row end
+    Farm.sw, Farm.row = nil, nil
     local named, other = {}, {}
-    for _, root in ipairs(FarmRoots()) do
+    for _, root in ipairs(Farm.roots()) do
         for _, g in ipairs(root:GetChildren()) do
-            if g:IsA("ScreenGui") and not SKIP_GUI[g.Name] then
+            if g:IsA("ScreenGui") and not Noti.SKIP_GUI[g.Name] then
                 if string.find(string.lower(g.Name), "vxeze", 1, true) then named[#named + 1] = g else other[#other + 1] = g end
             end
         end
     end
     for _, list in ipairs({ named, other }) do
         for _, g in ipairs(list) do
-            local sw, row = ScanGui(g)
-            if sw then farmSw, farmRow = sw, row return sw, row end
+            local sw, row = Farm.scanGui(g)
+            if sw then Farm.sw, Farm.row, Farm.seenUI = sw, row, true return sw, row end
         end
     end
 end
-
-local function FarmIsOn(sw, row)
+function Farm.isOn(sw, row)
     for _, inst in ipairs({ sw, row }) do
         local ok, attrs = pcall(function() return inst:GetAttributes() end)
-        if ok then for _, k in ipairs(ATTR_KEYS) do if type(attrs[k]) == "boolean" then return attrs[k] end end end
+        if ok then for _, k in ipairs(Farm.ATTRS) do if type(attrs[k]) == "boolean" then return attrs[k] end end end
     end
     local scope = (sw.AbsoluteSize.X > 160) and row or sw
     local list = { scope }
@@ -1138,253 +1006,372 @@ local function FarmIsOn(sw, row)
     return false
 end
 
-local FARM_UI_SYNC = true 
-local CFG_KEY = "Start Farm"
-local function CfgTable()
-    local c = env.Config
-    if type(c) == "table" then return c end
-end
-local function CfgFarmOff(cfg)
-    local n = 0
-    pcall(function()
-        if cfg[CFG_KEY] ~= false then cfg[CFG_KEY] = false n += 1 end
-        local seen = 0
-        for k, v in next, cfg do
-            seen += 1
-            if seen > 600 then break end
-            if type(k) == "string" and v == true and k ~= CFG_KEY and NameIsFarm(k) then cfg[k] = false n += 1 end
-        end
-    end)
-    return n
-end
-
-local function StopVxezeFarm()
-    local ok, r, how = pcall(function()
-        local cfg = CfgTable()
-        local wasOn = cfg ~= nil and cfg[CFG_KEY] == true
-        local changed = cfg and CfgFarmOff(cfg) or 0
-        local flags = EnvFarmFlags()
-        for _, f in ipairs(flags) do f.tbl[f.key] = false end
-        local sw, row, clicked
-        if FARM_UI_SYNC or not cfg then
-            sw, row = GetFarmToggle()
-            if sw and FarmIsOn(sw, row) then
-                ClickButton(sw) task.wait(0.8) clicked = true
-                if FarmIsOn(sw, row) then ViaVIM(sw, "mouse") task.wait(0.8) end
-                if cfg then CfgFarmOff(cfg) end
-            end
-        end
-        if cfg then task.wait(0.3) if cfg[CFG_KEY] ~= false then cfg[CFG_KEY] = false end end
-        local uiOn = sw and FarmIsOn(sw, row)
-        if uiOn then
-            if cfg or #flags > 0 then return "off", "config (UI masih tampak ON)" end
-            return "stuck"
-        end
-        if clicked then return "off", cfg and "config+ui" or "ui" end
-        if wasOn or changed > 0 or #flags > 0 then return "off", cfg and "config" or "env-flag" end
-        if cfg then return "alreadyoff", "config" end
-        if sw then return "alreadyoff", "ui" end
-        return "notfound"
-    end)
-    if ok then return r, how end
-    return "error"
-end
-
-local SEA_PLACES = { [2753915549] = 1, [4442272183] = 2, [7449423635] = 3 }
-local CUR_SEA = SEA_PLACES[game.PlaceId]
-local seaTries, seaNext = 0, 0
-local function SeaGuard()
-    if CUR_SEA == nil or CUR_SEA == 3 or seaTries >= 6 or os.time() < seaNext then return end
-    local d = LP:FindFirstChild("Data")
-    local l = d and d:FindFirstChild("Level")
-    local lv = l and tonumber(l.Value)
-    if not lv then return end
-    local remote, label
-    if lv >= 1500 then remote, label = "TravelZou", "Sea 3"
-    elseif lv >= 700 and CUR_SEA == 1 then remote, label = "TravelDressrosa", "Sea 2" end
-    if not remote then seaTries = 99 SetStatus("Sea guard: level " .. lv .. " belum cukup") return end
-    seaTries += 1
-    seaNext = os.time() + 45
-    SetStatus("Sea guard: travel ke " .. label .. " (" .. seaTries .. "/6)")
-    pcall(function() Remotes.CommF_:InvokeServer(remote) end)
-end
-
-local ROT_FILE = "RotationState_" .. GROUP_ID .. ".txt"
-local ACC_FILE = "RotAcc_" .. GROUP_ID .. "_" .. UID .. ".txt"
-local function LoadRot()
-    local st = { t = ACCOUNT_TIME, adj = 0, exit = 0, exit_by = "", oh = 90 }
-    if type(isfile) == "function" and isfile(ROT_FILE) then
-        local ok, d = pcall(function() return HttpService:JSONDecode(readfile(ROT_FILE)) end)
-        if ok and type(d) == "table" then
-            for k in pairs(st) do if type(d[k]) == type(st[k]) then st[k] = d[k] end end
-        end
+function Farm.start()
+    if not Team.done() or not hasHRP() then return 3 end
+    local sw, row = Farm.toggle()
+    if not sw then
+        Farm.scanBackoff = math.min(60, Farm.scanBackoff * 2)
+        return Farm.scanBackoff
     end
-    st.t = math.clamp(st.t, ACCOUNT_TIME, ACCOUNT_TIME_MAX)
-    return st
-end
-local function SaveRot(st)
-    if type(writefile) == "function" then pcall(writefile, ROT_FILE, HttpService:JSONEncode(st)) end
-end
-local function MarkExit()
-    local st = LoadRot()
-    st.exit, st.exit_by = os.time(), LP.Name
-    SaveRot(st)
-end
-local function RotationLearn(now)
-    local st = LoadRot()
-    local hasFS = type(isfile) == "function"
-    local accStart = hasFS and isfile(ACC_FILE) and tonumber(readfile(ACC_FILE)) or nil
-    local P = accStart and (now - accStart) or nil
-    local hasLast = hasFS and isfile(LAST_FILE)
-    local gap = st.exit > 0 and (now - st.exit) or nil
-    if gap and st.exit_by ~= LP.Name and gap > 0 and gap < 900 then
-        st.oh = math.floor(0.8 * st.oh + 0.2 * gap)
-    end
-    if P and hasLast and P >= MIN_VALID_P then
-        local alive = math.clamp(math.floor(P / (st.t + st.oh) + 0.5), 1, 20)
-        local epoch = alive * (st.t + st.oh)
-        local cooled = (now - st.adj) >= 0.8 * epoch
-        local R = S.nextRoll - now + ROLL_MARGIN
-        if R > 0 then
-            if st.t >= ACCOUNT_TIME_MAX then
-                warn("[Rotation:" .. GROUP_ID .. "] cooldown belum habis tapi ACCOUNT_TIME max")
-            elseif cooled then
-                local old = st.t
-                st.t = math.min(ACCOUNT_TIME_MAX, st.t + math.min(ROT_MAX_STEP, math.ceil(R / alive)))
-                st.adj = now
-                local msg = string.format("Skip terdeteksi (~%d akun hidup, kurang %ds): %.1f -> %.1f menit", alive, R, old / 60, st.t / 60)
-                warn("[Rotation:" .. GROUP_ID .. "] " .. msg) SetStatus(msg)
-            end
-        elseif R < -SLACK_DECAY and st.t > ACCOUNT_TIME and cooled then
-            local old = st.t
-            st.t = math.max(ACCOUNT_TIME, st.t - 60)
-            st.adj = now
-            local msg = string.format("Putaran longgar: %.1f -> %.1f menit", old / 60, st.t / 60)
-            warn("[Rotation:" .. GROUP_ID .. "] " .. msg) SetStatus(msg)
-        end
-    end
-    SaveRot(st)
-    if type(writefile) == "function" then pcall(writefile, ACC_FILE, tostring(now)) end
-    return st.t
-end
-
-local lastHb = 0
-local function Heartbeat()
-    if not LOCK_LOST or os.time() - lastHb < 30 then return end
-    lastHb = os.time()
-    local msg = "Slot " .. GROUP_ID .. " direbut instance lain! Restart tab ini"
-    warn("[Rotation:" .. GROUP_ID .. "] " .. msg) SetStatus(msg)
-end
-local lvWatchNext, lvNotified = 0, false
-local function LevelWatch()
-    local bs = getgenv().BloxSea
-    if lvNotified or not bs or bs.mode ~= "leveling" or os.time() < lvWatchNext then return end
-    lvWatchNext = os.time() + 60
-    local d = LP:FindFirstChild("Data")
-    local l = d and d:FindFirstChild("Level")
-    local lv = l and tonumber(l.Value)
-    if lv and lv >= LEVEL_VXEZE_MIN then
-        lvNotified = true
-        local msg = "Level " .. lv .. " >= " .. LEVEL_VXEZE_MIN .. ": config Beli aktif di sesi berikutnya"
-        print("[Level Guard] " .. msg) SetStatus(msg)
-    end
-end
-
-local function Tick()
-    if not S.started then return 1 end
-    Heartbeat()
-    LevelWatch()
-    if S.signaled then return 10 end
-    SeaGuard()
-    local timeLeft = S.sessionEnd - os.time()
-    if timeLeft <= FARM_STOP_BEFORE and not S.farmStopped and os.time() >= S.farmRetryAt then
-        SetStatus("Matikan farm...")
-        local r, how = StopVxezeFarm()
-        S.farmTries += 1
-        if r == "off" or r == "alreadyoff" or S.farmTries >= 4 then
-            S.farmStopped = true
-            SetStatus(r == "off" and ("Farm dimatikan (" .. tostring(how) .. ")") or r == "alreadyoff" and ("Farm sudah mati (" .. tostring(how) .. ")") or ("Farm: " .. tostring(r) .. " (menyerah)"))
-        else
-            S.farmRetryAt = os.time() + 10
-            SetStatus("Farm: " .. r .. ", coba lagi 10s (" .. S.farmTries .. "/4)")
-        end
-    end
-    if os.time() >= S.sessionEnd then
-        S.signaled = true
-        MarkExit()
-        if type(writefile) == "function" then pcall(writefile, LP.Name .. "_winterswap.json", '{"status":"done"}') end
-        SetStatus("Selesai! Menunggu WinterHub ganti akun...")
+    Farm.scanBackoff = 5
+    if os.time() < Farm.onNext then return 3 end
+    if Farm.isOn(sw, row) then Farm.onTries = 0 Farm.onNext = os.time() + 15 return 5 end
+    if Farm.onTries >= CFG.FARM_ON_MAX then
+        Farm.onTries, Farm.onNext = 0, os.time() + 120
+        if os.time() - Farm.warnAt >= 120 then Farm.warnAt = os.time() UI.status("Farm auto-start failed, check the Vxeze toggle") end
         return 10
     end
-    local rem = S.nextRoll - os.time()
-    if rem <= 0 then DoRoll() return 1 end
-    if S.fails == 0 then SetStatus("Next Roll in: " .. math.ceil(rem / 60) .. " minutes | Sesi: " .. math.ceil((S.sessionEnd - os.time()) / 60) .. "m") end
-    return math.min(rem, 20)
+    Farm.onTries = Farm.onTries + 1
+    Farm.onNext = os.time() + 8
+    UI.status("Auto-start farm (" .. Farm.onTries .. "/" .. CFG.FARM_ON_MAX .. ")")
+    if type(env.Config) == "table" then env.Config[Farm.KEY] = true end
+    Input.click(sw) task.wait(1.2)
+    if not Farm.isOn(sw, row) then Input.vim(sw, "mouse") task.wait(1) end
+    if Farm.isOn(sw, row) then UI.status("Farm on (auto-start)") end
+    return 5
 end
 
-local function Start()
-    if S.started then return end
-    btn.Visible = false
-    frame.Size = UDim2.new(0, 230, 0, 32) lbl.Position = UDim2.new(0, 8, 0, 5)
-    local now = os.time()
-    local endAt
-    if type(isfile) == "function" and isfile(SESSION_FILE) then
-        endAt = tonumber(readfile(SESSION_FILE))
+function Farm.stopOnce()
+    local cfg = type(env.Config) == "table" and env.Config or nil
+    local wasOn = cfg ~= nil and cfg[Farm.KEY] == true
+    local changed = cfg and Farm.cfgOff(cfg) or 0
+    local flags = Farm.envFlags()
+    for _, f in ipairs(flags) do f.tbl[f.key] = false end
+    local sw, row = Farm.toggle()
+    local clicked = false
+    if sw and Farm.isOn(sw, row) then
+        Input.click(sw) task.wait(0.8) clicked = true
+        if Farm.isOn(sw, row) then Input.vim(sw, "mouse") task.wait(0.8) end
+        if cfg then Farm.cfgOff(cfg) end
     end
-    local newSession = true
-    if endAt then
-        if now < endAt then
-            newSession = false
-            SetStatus("Lanjut sesi, sisa " .. math.ceil((endAt - now) / 60) .. " menit")
-        elseif now - endAt <= SESSION_GRACE then
-            newSession = false
-            SetStatus("Sesi sudah habis, kirim sinyal")
+    if cfg then task.wait(0.3) if cfg[Farm.KEY] ~= false then cfg[Farm.KEY] = false end end
+    if sw and Farm.isOn(sw, row) then
+        if cfg or #flags > 0 then return "off", "config (UI still looks ON)" end
+        return "stuck"
+    end
+    if clicked then return "off", cfg and "config+ui" or "ui" end
+    if wasOn or changed > 0 or #flags > 0 then return "off", cfg and "config" or "env-flag" end
+    if cfg then return "alreadyoff", "config" end
+    if sw then return "alreadyoff", "ui" end
+    return "notfound"
+end
+function Farm.stop()
+    if os.time() < Farm.stopNext then return 3 end
+    UI.status("Stopping farm...")
+    local ok, r, how = pcall(Farm.stopOnce)
+    if not ok then r, how = "error", tostring(r) end
+    Farm.stopTries = Farm.stopTries + 1
+    if r == "off" or r == "alreadyoff" or Farm.stopTries >= 4 then
+        Farm.stopped = true
+        UI.status("Farm " .. (r == "off" and "stopped" or r == "alreadyoff" and "already off" or ("stop gave up: " .. tostring(r))) .. " (" .. tostring(how) .. ")")
+        return 10
+    end
+    Farm.stopNext = os.time() + 10
+    UI.status("Farm stop: " .. tostring(r) .. ", retrying in 10s (" .. Farm.stopTries .. "/4)")
+    return 3
+end
+function Farm.tick()
+    if not Sess.active or Sess.signaledAt or not Vx.mode then return 5 end
+    local left = Sess.endAt - os.time()
+    if left <= CFG.FARM_STOP_BEFORE then
+        if Farm.stopped then return 10 end
+        return Farm.stop()
+    end
+    if left <= CFG.FARM_STOP_BEFORE + 30 then return 5 end
+    return Farm.start()
+end
+function Farm.hubWatch()
+    if Vx.loaded and not Farm.seenUI and not Vx.failed and Vx.reloads < 1 and os.time() - (Vx.loadedAt or os.time()) > CFG.VX_UI_TIMEOUT then
+        Vx.reloads = Vx.reloads + 1
+        Log.add("W", "Vxeze UI not seen after " .. CFG.VX_UI_TIMEOUT .. "s, reloading the hub once")
+        Task.spawn("vxeze-reload", Vx.load)
+    end
+    return 15
+end
+
+----------------------------------------------------------------
+-- 13. GACHA
+----------------------------------------------------------------
+local HIGH_NORM = {}
+for _, k in ipairs(HIGH_TIER) do HIGH_NORM[#HIGH_NORM + 1] = words(k) end
+local function splitCamel(s) return (tostring(s):gsub("(%l)(%u)", "%1 %2")) end
+local function IsHighTier(name)
+    local w = words(splitCamel(name))
+    for _, k in ipairs(HIGH_NORM) do if string.find(w, k, 1, true) then return true end end
+    return false
+end
+Gacha.IsHighTier = IsHighTier
+
+local function formatNum(n)
+    local s = string.format("%d", math.floor(tonumber(n) or 0))
+    while true do
+        local r, i = s:gsub("^(-?%d+)(%d%d%d)", "%1,%2")
+        s = r
+        if i == 0 then break end
+    end
+    return s
+end
+function Gacha.getBeli()
+    local ok, v = pcall(function()
+        local d = LP:FindFirstChild("Data")
+        local b = d and d:FindFirstChild("Beli")
+        return (b and b:IsA("ValueBase")) and b.Value or 0
+    end)
+    return ok and v or 0
+end
+function Gacha.snapshot()
+    local out = {}
+    for _, cont in ipairs({ LP:FindFirstChild("Backpack"), LP.Character }) do
+        if cont then
+            for _, it in ipairs(cont:GetChildren()) do
+                if it:IsA("Tool") then
+                    local n = it:GetAttribute("OriginalName") or it.Name
+                    out[n] = out[n] or { count = 0, tool = it }
+                    out[n].count = out[n].count + 1
+                end
+            end
         end
     end
-    if newSession then
-        endAt = now + RotationLearn(now)
-        if type(writefile) == "function" then pcall(writefile, SESSION_FILE, tostring(endAt)) end
-        pcall(function() local f = LP.Name .. "_winterswap.json" if isfile(f) then delfile(f) end end)
-    end
-    S.sessionEnd = endAt
-    S.signaled = false
-    S.farmStopped, S.farmTries, S.farmRetryAt = false, 0, 0
-    S.started = true
+    return out
 end
-btn.MouseButton1Click:Connect(Start)
-local function Stop()
-    S.started = false
-    btn.Visible = true
-    frame.Size = UDim2.new(0, 230, 0, 70) lbl.Position = UDim2.new(0, 8, 0, 42)
-    SetStatus("Dihentikan manual. Klik START untuk lanjut")
+function Gacha.rollRemote()
+    local cf = commF()
+    local ok, res = pcall(function() return cf and cf:InvokeServer("Cousin", "Buy") end)
+    if ok and res ~= nil and res ~= false then return res end
+    local ok2, res2 = pcall(function()
+        local net = RS:FindFirstChild("Modules") and RS.Modules:FindFirstChild("Net")
+        local rf = net and net:FindFirstChild("RF/GachaNetworkRF")
+        return rf and rf:InvokeServer({ Context = "Purchase", BoxName = "ZiolesGacha" })
+    end)
+    if ok2 and res2 ~= nil and res2 ~= false then return res2 end
 end
-env.BloxSM.Start = Start
-env.BloxSM.ResetSession = function() if type(delfile) == "function" and isfile(SESSION_FILE) then delfile(SESSION_FILE) end end
-env.BloxSM.Stop = Stop
+function Gacha.resetSession() Gacha.fails, Gacha.retryAt, Gacha.reportedStuck = 0, 0, false end
+Gacha.resetSession()
 
-if type(isfile) == "function" and isfile(LAST_FILE) then
-    S.nextRoll = (tonumber(readfile(LAST_FILE)) or 0) + ROLL_INTERVAL
-else
-    S.nextRoll = os.time()
+function Gacha.store(name, tool)
+    for attempt = 1, 3 do
+        local cf = commF()
+        pcall(function() if cf then cf:InvokeServer("StoreFruit", name, tool) end end)
+        task.wait(1)
+        if not tool:IsDescendantOf(game) then return true end
+        task.wait(1)
+    end
+    return false
 end
-if RENDER_OFF then
+
+function Gacha.roll()
+    UI.status("Rolling gacha...")
+    local before = Gacha.snapshot()
+    Gacha.rollRemote()
+    task.wait(2.5)
+    local rawBeli = Gacha.getBeli()
+    local low = rawBeli < CFG.LOW_BELI
+    local beliText = low and ("LOW BELI: " .. formatNum(rawBeli)) or ("Beli left: " .. formatNum(rawBeli))
+    local got, highs = false, {}
+    for name, info in pairs(Gacha.snapshot()) do
+        if info.count > ((before[name] and before[name].count) or 0) then
+            got = true
+            if IsHighTier(name) then highs[#highs + 1] = { name = name, tool = info.tool } else UI.status("Ignored low-tier item: " .. name) end
+        end
+    end
+    for _, h in ipairs(highs) do
+        UI.status("HIGH TIER: " .. h.name .. " - storing")
+        local stored = Gacha.store(h.name, h.tool)
+        Store.set("highTier", Store.data.highTier + 1)
+        UI.status(stored and ("Stored in chest: " .. h.name) or ("STORE FAILED: " .. h.name))
+        WH.send("fruit", "HIGH TIER OBTAINED",
+            string.format("GOT A HIGH TIER: **%s** %s\n%s", h.name, stored and "(Stored in Chest)" or "(Store FAILED - still in Backpack)", beliText),
+            low and 16711680 or 16776960, 2)
+    end
+    if got then
+        Gacha.fails = 0
+        Store.set("lastRoll", os.time())
+        Store.set("rolls", Store.data.rolls + 1)
+        Store.save(true)
+        WH.send("report", "Roll Report", "Status: new item received\n" .. beliText, low and 16711680 or 3447003, 1)
+    else
+        Gacha.fails = Gacha.fails + 1
+        local delay = math.min(300, 45 * 2 ^ (Gacha.fails - 1))
+        Gacha.retryAt = os.time() + delay
+        UI.status("No new item (cooldown?), retry in " .. delay .. "s")
+        if Gacha.fails == 3 and not Gacha.reportedStuck then
+            Gacha.reportedStuck = true
+            WH.send("report", "Roll not succeeding", "3 failed rolls in a row on " .. LP.Name .. " (" .. beliText .. ")", 15158332, 1)
+        end
+    end
+end
+function Gacha.tick()
+    if not Sess.active or Sess.signaledAt then return 5 end
+    if not Team.done() or not hasHRP() then return 3 end
+    local due = math.max(Store.data.lastRoll + CFG.ROLL_INTERVAL, Gacha.retryAt)
+    local rem = due - os.time()
+    if rem > 0 then return math.min(rem, 20) end
+    if Sess.endAt - os.time() < 5 then return 5 end
+    Gacha.roll()
+    return 1
+end
+
+----------------------------------------------------------------
+-- 14. SEA GUARD
+----------------------------------------------------------------
+Sea.PLACES = { [2753915549] = 1, [4442272183] = 2, [7449423635] = 3 }
+Sea.cur = Sea.PLACES[game.PlaceId]
+function Sea.reset() Sea.tries, Sea.nextAt = 0, 0 end
+Sea.reset()
+function Sea.tick()
+    if not CFG.SEA_GUARD or not Sess.active or Sess.signaledAt then return 10 end
+    if Sea.cur == nil or Sea.cur == 3 or Sea.tries >= 6 or os.time() < Sea.nextAt then return 10 end
+    local lv = Vx.readLevel()
+    if not lv then return 10 end
+    local remote, label
+    if lv >= 1500 then remote, label = "TravelZou", "Sea 3"
+    elseif lv >= 700 and Sea.cur == 1 then remote, label = "TravelDressrosa", "Sea 2" end
+    if not remote then Sea.tries = 99 UI.status("Sea guard: level " .. lv .. " too low to travel") return 10 end
+    Sea.tries = Sea.tries + 1
+    Sea.nextAt = os.time() + 45
+    UI.status("Sea guard: travelling to " .. label .. " (" .. Sea.tries .. "/6)")
+    local cf = commF()
+    pcall(function() if cf then cf:InvokeServer(remote) end end)
+    return 10
+end
+
+----------------------------------------------------------------
+-- 15. DASHBOARD
+----------------------------------------------------------------
+UI.last, UI.text = "Booting...", ""
+function UI.status(t)
+    if t ~= UI.last then UI.last = t Log.add("I", t) end
+end
+function UI.build()
+    local gui = Instance.new("ScreenGui")
+    gui.Name, gui.ResetOnSpawn, gui.DisplayOrder = "BloxFactoryUI", false, 999
+    local frame = Instance.new("Frame", gui)
+    frame.Size, frame.Position = UDim2.new(0, 250, 0, 96), UDim2.new(0, 6, 0, 40)
+    frame.BackgroundColor3, frame.BackgroundTransparency = Color3.fromRGB(25, 25, 30), 0.2
+    Instance.new("UICorner", frame).CornerRadius = UDim.new(0, 8)
+    local lbl = Instance.new("TextLabel", frame)
+    lbl.Size, lbl.Position, lbl.BackgroundTransparency = UDim2.new(1, -12, 1, -10), UDim2.new(0, 6, 0, 5), 1
+    lbl.TextColor3, lbl.TextSize, lbl.Font = Color3.new(1, 1, 1), 11, Enum.Font.Gotham
+    lbl.TextXAlignment, lbl.TextYAlignment, lbl.TextWrapped = Enum.TextXAlignment.Left, Enum.TextYAlignment.Top, true
+    local btn = Instance.new("TextButton", frame)
+    btn.Size, btn.Position = UDim2.new(1, -16, 0, 26), UDim2.new(0, 8, 1, -32)
+    btn.BackgroundColor3, btn.Text = Color3.fromRGB(60, 160, 90), "START"
+    btn.TextColor3, btn.Font, btn.TextSize, btn.Visible = Color3.new(1, 1, 1), Enum.Font.GothamBold, 13, false
+    btn.MouseButton1Click:Connect(function() Sess.start() end)
+    pcall(function() local old = PG:FindFirstChild("BloxFactoryUI") if old then old:Destroy() end gui.Parent = PG end)
+    UI.gui, UI.lbl, UI.btn = gui, lbl, btn
+end
+function UI.showButton(show) if UI.btn then UI.btn.Visible = show end end
+
+function Watch.health()
+    local issues = {}
+    if Group.ready and not Group.lockOk then issues[#issues + 1] = "NO LOCK" end
+    if Group.lost then issues[#issues + 1] = "LOCK LOST" end
+    if Vx.failed then issues[#issues + 1] = "HUB FAILED" end
+    if Dead.reason then issues[#issues + 1] = "DEAD" end
+    if WH.pending() > 20 then issues[#issues + 1] = "WEBHOOK BACKLOG" end
+    for name, t in pairs(S.beats) do
+        if os.clock() - t > CFG.STALL_AFTER then issues[#issues + 1] = "STALL:" .. name end
+    end
+    return #issues == 0 and "OK" or table.concat(issues, ", ")
+end
+local function mins(sec) return math.max(0, math.ceil(sec / 60)) end
+function UI.render()
+    if not UI.lbl then return 3 end
+    local now = os.time()
+    local sessLeft = Sess.active and mins(Sess.endAt - now) or 0
+    local roll = mins(math.max(Store.data.lastRoll + CFG.ROLL_INTERVAL, Gacha.retryAt) - now)
+    local txt = string.format("%s | %s | %s | Lv %s\nSession: %dm left | Next roll: %dm\nFarm: %s | Webhook queue: %d\nHealth: %s\n%s",
+        CFG.VERSION, Group.id or "Group?", Vx.mode or "?", tostring(Vx.level or "?"), sessLeft, roll,
+        Farm.stopped and "stopped" or "running", WH.pending(), Watch.health(), UI.last)
+    if txt ~= UI.text then UI.text = txt UI.lbl.Text = txt end
+    return 2
+end
+function Watch.statusFile()
+    if not Group.ready then return 15 end
+    FS.writeJSON("Status_" .. Group.id .. "_" .. UID .. ".json", {
+        name = LP.Name, group = Group.id, mode = Vx.mode, level = Vx.level, sessionEnd = Sess.endAt,
+        nextRoll = Store.data.lastRoll + CFG.ROLL_INTERVAL, signaled = Sess.signaledAt, health = Watch.health(), ts = os.time() })
+    return 15
+end
+
+----------------------------------------------------------------
+-- 16. WATCHDOG
+----------------------------------------------------------------
+Watch.warned = {}
+function Watch.tick()
+    for name, t in pairs(S.beats) do
+        local age = os.clock() - t
+        if age > CFG.STALL_AFTER and not Watch.warned[name] then
+            Watch.warned[name] = true
+            Log.add("E", "service '" .. name .. "' has not reported for " .. math.floor(age) .. "s")
+        elseif age <= CFG.STALL_AFTER then Watch.warned[name] = nil end
+    end
+    Log.flush()
+    Store.save()
+    return 15
+end
+
+----------------------------------------------------------------
+-- 17. BOOT
+----------------------------------------------------------------
+local function Unload()
+    if not S.alive then return end
+    S.alive = false
+    Group.release()
+    Log.add("I", "unloading")
+    Log.flush() Store.save(true) WH.saveOutbox()
+    for _, c in ipairs(S.conns) do pcall(function() c:Disconnect() end) end
+    pcall(function() UI.gui:Destroy() end)
+    if CFG.RENDER_OFF then pcall(function() RunService:Set3dRenderingEnabled(true) end) end
+end
+
+env.BloxSM = {
+    Version = CFG.VERSION, Unload = Unload, Start = Sess.start, Stop = Sess.stop,
+    ResetSession = function() FS.delete(Sess.filePath()) Log.add("I", "session file deleted") end,
+    Status = function() print(UI.text) return UI.text end,
+}
+
+UI.build()
+Store.load()
+WH.loadOutbox()
+Group.changeHooks[#Group.changeHooks + 1] = Sess.migrate
+Log.add("I", CFG.VERSION .. " booting for " .. LP.Name)
+
+if CFG.RENDER_OFF then
     pcall(function() RunService:Set3dRenderingEnabled(false) end)
-    pcall(function() if setfpscap then setfpscap(FPS_CAP) end end)
+    pcall(function() if setfpscap then setfpscap(CFG.FPS_CAP) end end)
     pcall(function() settings().Rendering.QualityLevel = 1 end)
 end
-S.conns[1] = LP.Idled:Connect(function() VirtualUser:CaptureController() VirtualUser:ClickButton2(Vector2.new()) end)
+S.conns[#S.conns + 1] = LP.Idled:Connect(function() VirtualUser:CaptureController() VirtualUser:ClickButton2(Vector2.new()) end)
+if CFG.DEAD_ON_ERROR then
+    S.conns[#S.conns + 1] = GuiService.ErrorMessageChanged:Connect(function()
+        local m = GuiService:GetErrorMessage()
+        if m and m ~= "" then Dead.mark("error prompt: " .. m) end
+    end)
+end
 
-task.spawn(function()
-    repeat task.wait(1) until LP.Character and LP.Character:FindFirstChild("HumanoidRootPart")
-    LP:WaitForChild("Backpack")
+Group.acquire()
+Noti.boot()
+Vx.boot()
+Task.service("team", 1, Team.tick)
+Task.service("group-lock", CFG.LOCK_REFRESH, function() Group.refresh() end)
+Task.service("webhook", 1, WH.pump)
+Task.service("session-guard", 3, Sess.guard)
+Task.service("dead-watch", 10, Dead.watch)
+Task.service("farm", 3, Farm.tick)
+Task.service("hub-watch", 15, Farm.hubWatch)
+Task.service("gacha", 3, Gacha.tick)
+Task.service("sea-guard", 10, Sea.tick)
+Task.service("ui", 2, UI.render)
+Task.service("status-file", 15, Watch.statusFile)
+Task.service("watchdog", 15, Watch.tick)
+
+Task.spawn("session-boot", function()
+    local t0 = os.clock()
+    while S.alive and not hasHRP() and os.clock() - t0 < CFG.START_MAX_WAIT do task.wait(1) end
     task.wait(5)
-    Start()
-    while S.alive do
-        local ok, r = pcall(Tick)
-        if not ok then warn("[BloxSM] " .. tostring(r)) r = 5 end
-        task.wait(tonumber(r) or 1)
-    end
-    for _, c in ipairs(S.conns) do pcall(function() c:Disconnect() end) end
-    pcall(function() gui:Destroy() end)
-    if RENDER_OFF then pcall(function() RunService:Set3dRenderingEnabled(true) end) end
+    local g0 = os.clock()
+    while S.alive and not Group.ready and os.clock() - g0 < CFG.GROUP_WAIT_MAX do task.wait(0.5) end
+    if S.alive then Sess.start() end
 end)
