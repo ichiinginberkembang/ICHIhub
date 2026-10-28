@@ -1,319 +1,422 @@
 -- ==========================================
--- 1. VXEZE HUB CONFIG & LOADER
+-- 0. PENGATURAN GLOBAL & AUTO GROUP ID
 -- ==========================================
-getgenv().Config = {
-	["Auto Fire Shoot Heart Leviathan"] = false,
-	["Noti Profile"] = false,
-	["Auto Finish Train Draco Quest"] = false,
-	["Auto Dodge Skill Seabeast"] = false,
-	["Account Help"] = false,
-	["Auto Reset When Complete Volcano"] = false,
-	["Ignore Craft Volcanic Magnet"] = false,
-	["Auto Trade Azure Ember"] = false,
-	["Value Speed Fly Boat"] = 3,
-	["Hop Find Full Moon"] = false,
-	["Auto Trial Draco"] = false,
-	["Auto Aimbot Gun"] = false,
-	["Fruits v2 Account Help"] = false,
-	["Auto New World"] = false,
-	["Drive Boat To Hydra"] = false,
-	["Auto Summon Soul Ember"] = false,
-	["Summon Dough King"] = false,
-	["Auto Store Fruit"] = false,
-	["Auto Sell Fishing"] = false,
-	["Auto Get Fully Cyborg"] = false,
-	["Use Click M1 Skull Guitar Leviathan"] = false,
-	["Walk On Water"] = true,
-	["ESP Island"] = false,
-	["Multi Find Leviathan"] = false,
-	["Auto Magnet Event"] = false,
-	["Auto Buy Boat Beast Hunter"] = false,
-	["Auto Get Rainbow Haki"] = false,
-	["Boost Fps"] = true,
-	["Auto Spawn Kitsune Island"] = false,
-	["Auto Dragon Talon"] = false,
-	["Change JumpPower"] = false,
-	["Skill X Melee"] = 0.5,
-	["Hop Server [ Haki Color / Legendary Sword ]"] = false,
-	["Hop Server Elite Hunter"] = false,
-	["Auto Upgrade Sword Inventory"] = false,
-	["Random Devil Fruit"] = false,
-	["Auto Secret Quest"] = false,
-	["Auto Aimbot"] = false,
-	["Select Mob"] = { ["Factory Staff [Lv. 800]"] = true },
-	["Auto God Human"] = false,
-	["Sharkman Need Fish"] = false,
-	["Auto Tween To Event Fishing Spot"] = false,
-	["Min Player Join Dungeon"] = 2,
-	["Auto Yoru Mini (Hop Server)"] = false,
-	["Auto Farm Observation"] = false,
-	["Use Dragonstorm For Sea Event"] = false,
-	["Auto Touch Pad Haki"] = false,
-	["Attack Dough King"] = false,
-	["Auto Yoru Mini"] = false,
-	["Setup Kaitun v4 [ Fully ]"] = false,
-	["Tween Safe if have Items"] = false,
-	["Kill Aura Only Raid And Volcano"] = false,
-	["Auto Get Ghoul"] = false,
-	["Auto Finish Train Quest"] = false,
-	["Skill F Blox Fruit"] = 0.5,
-	["Account Main"] = false,
-	["Auto Get Cyborg"] = false,
-	["Skill C Blox Fruit"] = 0.5,
-	["Auto Turn On V3 Near Door"] = false,
-	["Auto Factory"] = false,
-	["Interface Scale"] = 90,
-	["White Screen"] = false,
-	["Notify Event Auto Refresh"] = false,
-	["Auto Sharkman Karate V3"] = false,
-	["Auto Dodge Skill Terrorshark"] = false,
-	["Hop Find Boss [ Cake Prince / Tyrant of the Skies ]"] = false,
-	["Auto TTK"] = false,
-	["Use Click M1 Fruit Leviathan"] = false,
-	["Auto Change Dragonstorm With Kill Leviathan"] = false,
-	["Auto Raid"] = false,
-	["% Health Player"] = 71,
-	["Auto Craft Haki Color [ Fully ]"] = false,
-	["Auto Third World"] = false,
-	["Kill Boss"] = false,
-	["Auto Click"] = true,
-	["Teleport Boat Other CFrame if Rough Sea"] = false,
-	["Auto Electric Claw"] = false,
-	["Speed Boat Auto Drive"] = 349,
-	["Auto Shark Anchor [ Fully ]"] = false,
-	["Auto Pirate Raid"] = false,
-	["Accept Quest [ Cake / Bone / Tiki ]"] = true,
-	["Skill Z Sword"] = 0.5,
-	["Auto Collect Fruits"] = false,
-	["Teleport To Kitsune Island"] = false,
-	["Time Hop Server"] = 5,
-	["Will Back When over 10km"] = false,
-	["Skill Z Gun"] = 0.5,
-	["Auto Find Leviathan"] = false,
-	["Value Collect Chest to Hop"] = 20,
-	["Hop Find Fruits / Berries / Chests"] = false,
-	["Auto Sea Event"] = false,
-	["Auto Stats"] = false,
-	["Select Weapon"] = "Melee",
-	["Auto Sanguine Art"] = false,
-	["Kill Aura With DragonStorm"] = false,
-	["Auto Get Observation v1-2 [ Fully ]"] = false,
-	["Farm Mob"] = false,
-	["Use Click M1 Skull Guitar For Sea Event"] = false,
-	["Auto CDK"] = false,
-	["Auto Crafting Volcanic Magnet"] = false,
-	["Hop Sever Raid"] = false,
-	["Auto Turn On Observation"] = true,
-	["Speed Tween"] = 181,
-	["Auto Join Dungeon"] = false,
-	["Attack Darkbeard"] = false,
-	["Auto Dodge Skill Mobs"] = false,
-	["No Fog"] = false,
-	["Auto Change Dragonstorm When Kill Boat"] = false,
-	["Auto Turn On V3"] = false,
-	["Tween Boat To Frozen Dimension"] = false,
-	["Distance Teleport Y"] = 800,
-	["Skill Z Melee"] = 0.5,
-	["Select Method Farm"] = "Cake",
-	["Just Use Skill when Player Active Ken"] = false,
-	["Value Speed Tween Boat"] = 250,
-	["Dough King [ Fully ]"] = false,
-	["Auto Start Leviathan"] = false,
-	["ESP Berry"] = false,
-	["Ignore Collect Bone"] = false,
-	["Auto Advanced Combat"] = false,
-	["Change WalkSpeed"] = false,
-	["Auto Pull Lever"] = false,
-	["Auto Fishing"] = false,
-	["Auto Buy Spy"] = false,
-	["Auto Tushita"] = false,
-	["Ignore Craft Volcanic Magnet Draco"] = false,
-	["Auto Destroy IDK"] = false,
-	["Ignore Boss"] = true,
-	["Value Damage Multi Segments"] = 131411,
-	["Fully Trial Draco"] = false,
-	["Auto Dojo Trainer"] = false,
-	["Auto Trial"] = false,
-	["Account Buy Chip"] = false,
-	["Auto Get Cyborg Hop Collect Chest"] = false,
-	["Kill players When complete Trial"] = false,
-	["Time Delay Kill"] = 3, -- DIUBAH JADI 3
-	["Use skill fast dont hold"] = false,
-	["Auto Collect Bone"] = false,
-	["Webhook Find Prehistoric Island"] = false,
-	["Auto Get Full Melee [ Fully ]"] = false,
-	["Use Click M1 Fruit For Sea Event"] = false,
-	["Skill X Sword"] = 0.5,
-	["Values Azure Ember"] = 10,
-	["Auto Turn On V4"] = false,
-	["Fps Cap"] = 10,
-	["Input WalkSpeed"] = 200,
-	["Hop Server Kitsune Island"] = false,
-	["Auto Pick Card Dungeon"] = false,
-	["Spam Join"] = false,
-	["Auto Farm Mastery 600 Sword In Inventory"] = false,
-	["Auto Collect Chests"] = false,
-	["Summon Soul Reaper"] = false,
-	["Auto Yama"] = false,
-	["Summon Darkbeard"] = false,
-	["Buy Blox Fruit Sniper Shop"] = false,
-	["Random Magnet Event"] = false,
-	["Auto Trade Bone"] = false,
-	["Hop Find Mirage Island [ Pull Lever ]"] = false,
-	["Auto Open Chest"] = false,
-	["Attack Multi Segments Leviathan"] = false,
-	["Auto Saber"] = false,
-	["Change Speed Boat"] = false,
-	["Auto Buy Chip and Attack Law"] = false,
-	["Auto Reset Vip Leviathan"] = false,
-	["Collect Chest When Server Spawn Legend Items"] = false,
-	["Distance Farm Aura"] = 5000, -- DIUBAH JADI 5000
-	["Auto Soul Guitar"] = false,
-	["Hop Find Darkbeard"] = false,
-	["Hop Server When Farm Observation"] = false,
-	["Value Speed Boat"] = 200,
-	["Interface Text Boost"] = 0,
-	["Auto Buy Chip For Account Select"] = false,
-	["Farm Mastery"] = false,
-	["Auto Upgrade Race V2-V3 Draco"] = false,
-	["Auto Death Step"] = false,
-	["Auto Load Script"] = true,
-	["Webhook Upgrade V4 + Train"] = false,
-	["Auto Upgrade Race V2-V3"] = false,
-	["Drive Boat To Tiki"] = false,
-	["Webhook Find Mirage"] = false,
-	["Auto Farm Mastery 600 Gun In Inventory"] = false,
-	["Auto Slap Battle"] = false,
-	["Webhook Find Leviathan"] = false,
-	["Auto Observation v2"] = false,
-	["Notify Event Only Current Sea"] = true,
-	["Select Skills Blox Fruit"] = { ["X"] = true, ["C"] = true, ["Z"] = true, ["F"] = true, ["V"] = true },
-	["Black Screen"] = false,
-	["Bring Mob Count"] = 6,
-	["Skill X Blox Fruit"] = 0.5,
-	["Change Size Reel"] = false,
-	["Skill C Melee"] = 0,
-	["Teleport Player"] = false,
-	["Auto Dragon Hunter"] = false,
-	["Input JumpPower"] = 251,
-	["Account Start Dungeon"] = false,
-	["Account Pick Slot Raid"] = false,
-	["Auto Multi Raid"] = false,
-	["Stack Train With Trial Race"] = false,
-	["Auto rejoin Disconnect"] = false,
-	["ESP Player"] = false,
-	["Auto Find Mirage"] = false,
-	["Bring Mob"] = true,
-	["Auto Sharkman Karate"] = false,
-	["Select Skills Sword"] = { ["X"] = true, ["Z"] = true },
-	["Fully Event Prehistoric Island"] = false,
-	["Darkbeard [ Fully ]"] = false,
-	["Attack No Animation"] = true,
-	["Start Farm"] = true,
-	["Auto Collect Egg"] = false,
-	["Hop Server Get Ghoul"] = false,
-	["Auto Awake Fruit"] = false,
-	["Auto Get Draco"] = false,
-	["Webhook Destroy IDK"] = false,
-	["Auto Upgrade Dragon Talon"] = false,
-	["Auto Choose Gears"] = false,
-	["Auto Attack Dungeon"] = false,
-	["Auto Upgrade Gun Inventory"] = false,
-	["Auto Buy Legendary Sword"] = false,
-	["ESP Fruit"] = false,
-	["Auto Farm Mastery 600 Melees"] = false,
-	["Auto Elite Hunter"] = false,
-	["Health %"] = 40,
-	["Auto Collect Soul Ember"] = false,
-	["Fly Boat"] = false,
-	["Auto Change Dragonstorm With Skull Guitar"] = false,
-	["Auto Reset Character"] = false,
-	["Select Skills Melee"] = { ["X"] = true, ["C"] = true, ["Z"] = true },
-	["Attack Rip Indra"] = false,
-	["Farm Material"] = false,
-	["Ping Discord"] = false,
-	["Use Portal Fruit Teleport"] = false,
-	["Noclip"] = false,
-	["Skill V Blox Fruit"] = 0.5,
-	["Reset Character Buy Boat"] = false,
-	["Skill X Gun"] = 0.5,
-	["Get Fruit In Inventory Low Beli"] = false,
-	["Use Your Boat Beast Hunter"] = false,
-	["Webhook Store Fruit"] = false,
-	["Auto Collect Berries"] = false,
-	["Auto Sea Event With Friend"] = false,
-	["Teleport Y"] = false,
-	["Auto Quest Fruits v2"] = false,
-	["Auto Summon Rip Indra"] = false,
-	["Tween Until Have Sea Event"] = false,
-	["Teleport Acient Clock"] = false,
-	["Prevent Security Kick"] = true,
-	["Auto Buy Gear Draco"] = false,
-	["Auto Event Prehistoric Island"] = false,
-	["Use Skill when Kill Player"] = false,
-	["Auto Repair Ur Ship"] = false,
-	["Auto Super Human"] = false,
-	["Auto Choose Gear Draco"] = false,
-	["Hidden Hop Dead Hour"] = true,
-	["Auto Turn On Buso"] = true,
-	["Select Zone"] = "Zone 3",
-	["Teleport Frozen Dimension"] = false,
-	["Auto Attack Leviathan"] = false,
-	["Attack Soul Reaper"] = false,
-	["Auto Return Dungeon"] = false,
-	["Auto Find Prehistoric Island"] = false,
-	["Auto Buy Gear"] = false,
-	["Select Skills Gun"] = { ["X"] = true, ["Z"] = true },
-	["Kill All Boss"] = false,
-	["Hop Find Dough King"] = false,
-	["Remove Notifications"] = true,
-	["Auto Buy Haki Color Recipe"] = false,
-	["Skill Z Blox Fruit"] = 0.5,
-	["Auto Accept Quest Fishing"] = false,
-	["Hop Server Find Boss"] = false
-}
+local LOCAL_UID       = game:GetService("Players").LocalPlayer.UserId
+local KATUN_URL       = "https://raw.githubusercontent.com/Dev-BlueX/BlueX-Hub/refs/heads/main/KaitunBloxFruits.lua"
+local LEVEL_VXEZE_MIN = 2200
 
--- ==========================================
--- 1b. SEA GUARD (pra-loader): hanya SATU flag transisi sea yang aktif, sesuai Sea saat ini
--- ==========================================
-do
-    local PLACE = { [2753915549] = 1, [4442272183] = 2, [7449423635] = 3 } -- Sea 1 / Sea 2 / Sea 3
-    local C = getgenv().Config
-    C["Auto New World"], C["Auto Third World"] = false, false -- jangan pernah dua-duanya true
-    local sea = PLACE[game.PlaceId]
-    if not game:IsLoaded() then game.Loaded:Wait() end
-    local lv
-    pcall(function()
-        local lp = game:GetService("Players").LocalPlayer
-        local d = lp:WaitForChild("Data", 8)
-        local l = d and d:WaitForChild("Level", 8)
-        lv = l and tonumber(l.Value)
-    end)
-    if sea == 1 and lv and lv >= 700 then C["Auto New World"] = true       -- Sea 1 -> Sea 2
-    elseif sea == 2 and lv and lv >= 1500 then C["Auto Third World"] = true -- Sea 2 -> Sea 3
-    end
-    getgenv().BloxSea = { sea = sea, level = lv }
-    warn("[SeaGuard] Sea=" .. tostring(sea) .. " Level=" .. tostring(lv)
-        .. " NewWorld=" .. tostring(C["Auto New World"]) .. " ThirdWorld=" .. tostring(C["Auto Third World"]))
+-- ---------- AUTO GROUP_ID (slot lock per akun) ----------
+local MAX_GROUPS   = 20
+local LOCK_STALE   = 600
+local LOCK_REFRESH = 60
+
+local function ReadLock(n)
+    local f = "Lock_" .. n .. ".txt"
+    if not isfile(f) then return nil, nil end
+    local ok, data = pcall(readfile, f)
+    if not ok or type(data) ~= "string" then return nil, nil end
+    local uid, ts = string.match(data, "^(%d+)|(%d+)")
+    return uid, tonumber(ts)
 end
 
-loadstring(game:HttpGet("https://raw.githubusercontent.com/Dex-Bear/VxezeHubLoader/refs/heads/main/MainHub.lua"))()
+local function AssignGroupNum()
+    if type(isfile) ~= "function" or type(readfile) ~= "function" or type(writefile) ~= "function" then
+        return 1
+    end
+    local me = tostring(LOCAL_UID)
+    for n = 1, MAX_GROUPS do
+        if ReadLock(n) == me then return n end
+    end
+    math.randomseed(LOCAL_UID % 2147483647)
+    for n = 1, MAX_GROUPS do
+        local uid, ts = ReadLock(n)
+        if not uid or os.time() - (ts or 0) > LOCK_STALE then
+            writefile("Lock_" .. n .. ".txt", me .. "|" .. os.time())
+            task.wait(math.random(5, 15) / 10)
+            if ReadLock(n) == me then return n end
+        end
+    end
+    return 1
+end
+
+local GROUP_NUM = AssignGroupNum()
+local GROUP_ID  = "Group" .. GROUP_NUM
+
+task.spawn(function()
+    local me = tostring(LOCAL_UID)
+    while true do
+        task.wait(LOCK_REFRESH)
+        local uid = ReadLock(GROUP_NUM)
+        if uid == nil or uid == me then
+            pcall(writefile, "Lock_" .. GROUP_NUM .. ".txt", me .. "|" .. os.time())
+        end
+    end
+end)
+print("[GroupID] akun " .. LOCAL_UID .. " -> " .. GROUP_ID)
 
 -- ==========================================
--- 2. BLOXFACTORY (GACHA + ROTATION + KILL SWITCH v11)
+-- 1. KONFIGURASI SCRIPT (VXEZE & KAITUN)
 -- ==========================================
---[[ BloxFactory.lua (WINTERHUB ROTATION - EMBED UI + LOW BELI WARNING) ]]
+local VXEZE_URL = "https://raw.githubusercontent.com/Dex-Bear/VxezeHubLoader/refs/heads/main/MainHub.lua"
 
----------- KONFIGURASI ----------
--- Webhook 1: Khusus High Tier Fruit
+local function GetVxezeConfig()
+    return {
+        ["Auto Fire Shoot Heart Leviathan"] = false,
+        ["Noti Profile"] = false,
+        ["Auto Finish Train Draco Quest"] = false,
+        ["Auto Dodge Skill Seabeast"] = false,
+        ["Account Help"] = false,
+        ["Auto Reset When Complete Volcano"] = false,
+        ["Ignore Craft Volcanic Magnet"] = false,
+        ["Auto Trade Azure Ember"] = false,
+        ["Value Speed Fly Boat"] = 3,
+        ["Hop Find Full Moon"] = false,
+        ["Auto Trial Draco"] = false,
+        ["Auto Aimbot Gun"] = false,
+        ["Fruits v2 Account Help"] = false,
+        ["Auto New World"] = false,
+        ["Drive Boat To Hydra"] = false,
+        ["Auto Summon Soul Ember"] = false,
+        ["Summon Dough King"] = false,
+        ["Auto Store Fruit"] = false,
+        ["Auto Sell Fishing"] = false,
+        ["Auto Get Fully Cyborg"] = false,
+        ["Use Click M1 Skull Guitar Leviathan"] = false,
+        ["Walk On Water"] = true,
+        ["ESP Island"] = false,
+        ["Multi Find Leviathan"] = false,
+        ["Auto Magnet Event"] = false,
+        ["Auto Buy Boat Beast Hunter"] = false,
+        ["Auto Get Rainbow Haki"] = false,
+        ["Boost Fps"] = true,
+        ["Auto Spawn Kitsune Island"] = false,
+        ["Auto Dragon Talon"] = false,
+        ["Change JumpPower"] = false,
+        ["Skill X Melee"] = 0.5,
+        ["Hop Server [ Haki Color / Legendary Sword ]"] = false,
+        ["Hop Server Elite Hunter"] = false,
+        ["Auto Upgrade Sword Inventory"] = false,
+        ["Random Devil Fruit"] = false,
+        ["Auto Secret Quest"] = false,
+        ["Auto Aimbot"] = false,
+        ["Select Mob"] = { ["Factory Staff [Lv. 800]"] = true },
+        ["Auto God Human"] = false,
+        ["Sharkman Need Fish"] = false,
+        ["Auto Tween To Event Fishing Spot"] = false,
+        ["Min Player Join Dungeon"] = 2,
+        ["Auto Yoru Mini (Hop Server)"] = false,
+        ["Auto Farm Observation"] = false,
+        ["Use Dragonstorm For Sea Event"] = false,
+        ["Auto Touch Pad Haki"] = false,
+        ["Attack Dough King"] = false,
+        ["Auto Yoru Mini"] = false,
+        ["Setup Kaitun v4 [ Fully ]"] = false,
+        ["Tween Safe if have Items"] = false,
+        ["Kill Aura Only Raid And Volcano"] = false,
+        ["Auto Get Ghoul"] = false,
+        ["Auto Finish Train Quest"] = false,
+        ["Skill F Blox Fruit"] = 0.5,
+        ["Account Main"] = false,
+        ["Auto Get Cyborg"] = false,
+        ["Skill C Blox Fruit"] = 0.5,
+        ["Auto Turn On V3 Near Door"] = false,
+        ["Auto Factory"] = false,
+        ["Interface Scale"] = 90,
+        ["White Screen"] = false,
+        ["Notify Event Auto Refresh"] = false,
+        ["Auto Sharkman Karate V3"] = false,
+        ["Auto Dodge Skill Terrorshark"] = false,
+        ["Hop Find Boss [ Cake Prince / Tyrant of the Skies ]"] = false,
+        ["Auto TTK"] = false,
+        ["Use Click M1 Fruit Leviathan"] = false,
+        ["Auto Change Dragonstorm With Kill Leviathan"] = false,
+        ["Auto Raid"] = false,
+        ["% Health Player"] = 71,
+        ["Auto Craft Haki Color [ Fully ]"] = false,
+        ["Auto Third World"] = false,
+        ["Kill Boss"] = false,
+        ["Auto Click"] = true,
+        ["Teleport Boat Other CFrame if Rough Sea"] = false,
+        ["Auto Electric Claw"] = false,
+        ["Speed Boat Auto Drive"] = 349,
+        ["Auto Shark Anchor [ Fully ]"] = false,
+        ["Auto Pirate Raid"] = false,
+        ["Accept Quest [ Cake / Bone / Tiki ]"] = true,
+        ["Skill Z Sword"] = 0.5,
+        ["Auto Collect Fruits"] = false,
+        ["Teleport To Kitsune Island"] = false,
+        ["Time Hop Server"] = 5,
+        ["Will Back When over 10km"] = false,
+        ["Skill Z Gun"] = 0.5,
+        ["Auto Find Leviathan"] = false,
+        ["Value Collect Chest to Hop"] = 20,
+        ["Hop Find Fruits / Berries / Chests"] = false,
+        ["Auto Sea Event"] = false,
+        ["Auto Stats"] = false,
+        ["Select Weapon"] = "Melee",
+        ["Auto Sanguine Art"] = false,
+        ["Kill Aura With DragonStorm"] = false,
+        ["Auto Get Observation v1-2 [ Fully ]"] = false,
+        ["Farm Mob"] = false,
+        ["Use Click M1 Skull Guitar For Sea Event"] = false,
+        ["Auto CDK"] = false,
+        ["Auto Crafting Volcanic Magnet"] = false,
+        ["Hop Sever Raid"] = false,
+        ["Auto Turn On Observation"] = true,
+        ["Speed Tween"] = 181,
+        ["Auto Join Dungeon"] = false,
+        ["Attack Darkbeard"] = false,
+        ["Auto Dodge Skill Mobs"] = false,
+        ["No Fog"] = false,
+        ["Auto Change Dragonstorm When Kill Boat"] = false,
+        ["Auto Turn On V3"] = false,
+        ["Tween Boat To Frozen Dimension"] = false,
+        ["Distance Teleport Y"] = 800,
+        ["Skill Z Melee"] = 0.5,
+        ["Select Method Farm"] = "Cake",
+        ["Just Use Skill when Player Active Ken"] = false,
+        ["Value Speed Tween Boat"] = 250,
+        ["Dough King [ Fully ]"] = false,
+        ["Auto Start Leviathan"] = false,
+        ["ESP Berry"] = false,
+        ["Ignore Collect Bone"] = false,
+        ["Auto Advanced Combat"] = false,
+        ["Change WalkSpeed"] = false,
+        ["Auto Pull Lever"] = false,
+        ["Auto Fishing"] = false,
+        ["Auto Buy Spy"] = false,
+        ["Auto Tushita"] = false,
+        ["Ignore Craft Volcanic Magnet Draco"] = false,
+        ["Auto Destroy IDK"] = false,
+        ["Ignore Boss"] = true,
+        ["Value Damage Multi Segments"] = 131411,
+        ["Fully Trial Draco"] = false,
+        ["Auto Dojo Trainer"] = false,
+        ["Auto Trial"] = false,
+        ["Account Buy Chip"] = false,
+        ["Auto Get Cyborg Hop Collect Chest"] = false,
+        ["Kill players When complete Trial"] = false,
+        ["Time Delay Kill"] = 3,
+        ["Use skill fast dont hold"] = false,
+        ["Auto Collect Bone"] = false,
+        ["Webhook Find Prehistoric Island"] = false,
+        ["Auto Get Full Melee [ Fully ]"] = false,
+        ["Use Click M1 Fruit For Sea Event"] = false,
+        ["Skill X Sword"] = 0.5,
+        ["Values Azure Ember"] = 10,
+        ["Auto Turn On V4"] = false,
+        ["Fps Cap"] = 10,
+        ["Input WalkSpeed"] = 200,
+        ["Hop Server Kitsune Island"] = false,
+        ["Auto Pick Card Dungeon"] = false,
+        ["Spam Join"] = false,
+        ["Auto Farm Mastery 600 Sword In Inventory"] = false,
+        ["Auto Collect Chests"] = false,
+        ["Summon Soul Reaper"] = false,
+        ["Auto Yama"] = false,
+        ["Summon Darkbeard"] = false,
+        ["Buy Blox Fruit Sniper Shop"] = false,
+        ["Random Magnet Event"] = false,
+        ["Auto Trade Bone"] = false,
+        ["Hop Find Mirage Island [ Pull Lever ]"] = false,
+        ["Auto Open Chest"] = false,
+        ["Attack Multi Segments Leviathan"] = false,
+        ["Auto Saber"] = false,
+        ["Change Speed Boat"] = false,
+        ["Auto Buy Chip and Attack Law"] = false,
+        ["Auto Reset Vip Leviathan"] = false,
+        ["Collect Chest When Server Spawn Legend Items"] = false,
+        ["Distance Farm Aura"] = 5000,
+        ["Auto Soul Guitar"] = false,
+        ["Hop Find Darkbeard"] = false,
+        ["Hop Server When Farm Observation"] = false,
+        ["Value Speed Boat"] = 200,
+        ["Interface Text Boost"] = 0,
+        ["Auto Buy Chip For Account Select"] = false,
+        ["Farm Mastery"] = false,
+        ["Auto Upgrade Race V2-V3 Draco"] = false,
+        ["Auto Death Step"] = false,
+        ["Auto Load Script"] = true,
+        ["Webhook Upgrade V4 + Train"] = false,
+        ["Auto Upgrade Race V2-V3"] = false,
+        ["Drive Boat To Tiki"] = false,
+        ["Webhook Find Mirage"] = false,
+        ["Auto Farm Mastery 600 Gun In Inventory"] = false,
+        ["Auto Slap Battle"] = false,
+        ["Webhook Find Leviathan"] = false,
+        ["Auto Observation v2"] = false,
+        ["Notify Event Only Current Sea"] = true,
+        ["Select Skills Blox Fruit"] = { ["X"] = true, ["C"] = true, ["Z"] = true, ["F"] = true, ["V"] = true },
+        ["Black Screen"] = false,
+        ["Bring Mob Count"] = 6,
+        ["Skill X Blox Fruit"] = 0.5,
+        ["Change Size Reel"] = false,
+        ["Skill C Melee"] = 0,
+        ["Teleport Player"] = false,
+        ["Auto Dragon Hunter"] = false,
+        ["Input JumpPower"] = 251,
+        ["Account Start Dungeon"] = false,
+        ["Account Pick Slot Raid"] = false,
+        ["Auto Multi Raid"] = false,
+        ["Stack Train With Trial Race"] = false,
+        ["Auto rejoin Disconnect"] = false,
+        ["ESP Player"] = false,
+        ["Auto Find Mirage"] = false,
+        ["Bring Mob"] = true,
+        ["Auto Sharkman Karate"] = false,
+        ["Select Skills Sword"] = { ["X"] = true, ["Z"] = true },
+        ["Fully Event Prehistoric Island"] = false,
+        ["Darkbeard [ Fully ]"] = false,
+        ["Attack No Animation"] = true,
+        ["Start Farm"] = true,
+        ["Auto Collect Egg"] = false,
+        ["Hop Server Get Ghoul"] = false,
+        ["Auto Awake Fruit"] = false,
+        ["Auto Get Draco"] = false,
+        ["Webhook Destroy IDK"] = false,
+        ["Auto Upgrade Dragon Talon"] = false,
+        ["Auto Choose Gears"] = false,
+        ["Auto Attack Dungeon"] = false,
+        ["Auto Upgrade Gun Inventory"] = false,
+        ["Auto Buy Legendary Sword"] = false,
+        ["ESP Fruit"] = false,
+        ["Auto Farm Mastery 600 Melees"] = false,
+        ["Auto Elite Hunter"] = false,
+        ["Health %"] = 40,
+        ["Auto Collect Soul Ember"] = false,
+        ["Fly Boat"] = false,
+        ["Auto Change Dragonstorm With Skull Guitar"] = false,
+        ["Auto Reset Character"] = false,
+        ["Select Skills Melee"] = { ["X"] = true, ["C"] = true, ["Z"] = true },
+        ["Attack Rip Indra"] = false,
+        ["Farm Material"] = false,
+        ["Ping Discord"] = false,
+        ["Use Portal Fruit Teleport"] = false,
+        ["Noclip"] = false,
+        ["Skill V Blox Fruit"] = 0.5,
+        ["Reset Character Buy Boat"] = false,
+        ["Skill X Gun"] = 0.5,
+        ["Get Fruit In Inventory Low Beli"] = false,
+        ["Use Your Boat Beast Hunter"] = false,
+        ["Webhook Store Fruit"] = false,
+        ["Auto Collect Berries"] = false,
+        ["Auto Sea Event With Friend"] = false,
+        ["Teleport Y"] = false,
+        ["Auto Quest Fruits v2"] = false,
+        ["Auto Summon Rip Indra"] = false,
+        ["Tween Until Have Sea Event"] = false,
+        ["Teleport Acient Clock"] = false,
+        ["Prevent Security Kick"] = true,
+        ["Auto Buy Gear Draco"] = false,
+        ["Auto Event Prehistoric Island"] = false,
+        ["Use Skill when Kill Player"] = false,
+        ["Auto Repair Ur Ship"] = false,
+        ["Auto Super Human"] = false,
+        ["Auto Choose Gear Draco"] = false,
+        ["Hidden Hop Dead Hour"] = true,
+        ["Auto Turn On Buso"] = true,
+        ["Select Zone"] = "Zone 3",
+        ["Teleport Frozen Dimension"] = false,
+        ["Auto Attack Leviathan"] = false,
+        ["Attack Soul Reaper"] = false,
+        ["Auto Return Dungeon"] = false,
+        ["Auto Find Prehistoric Island"] = false,
+        ["Auto Buy Gear"] = false,
+        ["Select Skills Gun"] = { ["X"] = true, ["Z"] = true },
+        ["Kill All Boss"] = false,
+        ["Hop Find Dough King"] = false,
+        ["Remove Notifications"] = true,
+        ["Auto Buy Haki Color Recipe"] = false,
+        ["Skill Z Blox Fruit"] = 0.5,
+        ["Auto Accept Quest Fishing"] = false,
+        ["Hop Server Find Boss"] = false
+    }
+end
+
+local function GetKaitunConfig()
+    return {
+        ["Setting"] = { ["UiCheckItem"] = false, ["White Screen"] = false },       
+        ["MainItem"] = {
+            ["Saber"] = true, ["Get 3 Legendary Colors Haki"] = true, ["Hallow Scythe"] = true,
+            ["GodHuman"] = true, ["Skull Guitar"] = true, ["Cursed Dual Katana"] = true
+        },
+        ["MiscItem"] = {
+            ["Feathered Visage"] = true, ["Pole1st"] = true, ["Dragon Trident"] = true,
+            ["Rengoku"] = true, ["Spikey Trident"] = true, ["Buddy"] = true, ["Canvander"] = true,
+            ["Twin Hooks"] = true, ["Gravity Blade"] = true, ["Venom Bow"] = true
+        },
+        ["Fruits"] = { ["Fruits Eat"] = {"Gravity-Gravity","Pain-Pain"}, ["Auto Eat Fruits"] = false, ["Farm Mastery Fruits"] = true },
+        ["Quest"] = { ["Race V2-V3"] = true, ["Haki Rainbow"] = true },
+        ["Webhook"] = { ["Enable"] = false, ["UrlWebhook"] = "" }
+    }
+end
+
+-- ==========================================
+-- 1b. SEA GUARD
+-- ==========================================
+do
+    local PLACE = { [2753915549] = 1, [4442272183] = 2, [7449423635] = 3 }
+    getgenv().BloxSea = { sea = PLACE[game.PlaceId], level = nil }
+end
+
+-- ==========================================
+-- 1c. LEVEL GUARD & SCRIPT LOADER
+-- ==========================================
+do
+    local BS = getgenv().BloxSea
+    local function ReadLevel()
+        local ok, v = pcall(function()
+            local d = game:GetService("Players").LocalPlayer:FindFirstChild("Data")
+            local l = d and d:FindFirstChild("Level")
+            return l and tonumber(l.Value)
+        end)
+        return ok and v or nil
+    end
+    local function Run(url, name)
+        task.spawn(function()
+            local ok, e = pcall(function() loadstring(game:HttpGet(url))() end)
+            if not ok then warn("[Level Guard] " .. name .. " gagal dimuat: " .. tostring(e)) end
+        end)
+    end
+    local function Launch(lv)
+        if lv >= LEVEL_VXEZE_MIN then
+            BS.mode = "vxeze"
+            print("[Level Guard] Level " .. lv .. " detected. Loading Vxeze...")
+            getgenv().Config = GetVxezeConfig()
+            Run(VXEZE_URL, "Vxeze")
+        else
+            BS.mode = "kaitun"
+            print("[Level Guard] Level " .. lv .. " detected. Loading Kaitun...")
+            getgenv().Config = GetKaitunConfig()
+            Run(KATUN_URL, "Kaitun")
+        end
+    end
+    task.spawn(function()
+        local lv = ReadLevel()
+        while not lv do
+            task.wait(3)
+            lv = ReadLevel()
+        end
+        BS.level = lv
+        Launch(lv)
+    end)
+end
+
+-- ==========================================
+-- 2. BLOXFACTORY (GACHA + ROTATION + KILL SWITCH v15)
+-- ==========================================
 local WEBHOOK_FRUIT    = "https://discord.com/api/webhooks/1561728793226383510/PeYJqeHWViBXqs4M0VowG9xM-zk3Uupk2ta8UtWNUqh_R2IQaPIsxMIgZEXNnbRdJ2CM"
--- Webhook 2: Khusus Sisa Beli (Setelah Roll)
 local WEBHOOK_BELI     = "https://discord.com/api/webhooks/1564228949033222204/E2n26s5XvL45E4c6Ylnozwb3cyi03QOyinAcltbcrKyAjzj8bLCGMVeDo4IR3mSeOCwd"
 
 local RENDER_OFF       = true    
 local FPS_CAP          = 10       
 local ROLL_INTERVAL    = 7200    
-local ACCOUNT_TIME     = 960    -- 16 Menit
+local ACCOUNT_TIME     = 960    
+local ACCOUNT_TIME_MAX = 2400   
+local ROLL_MARGIN      = 60     
+local MIN_VALID_P      = 1200   
+local ROT_MAX_STEP     = 180    
+local SLACK_DECAY      = 1800   
 local SESSION_GRACE    = 180     
 local PREFERRED_TEAM   = "Pirates"  
 
@@ -324,7 +427,6 @@ local HIGH_TIER = {
     "buddha", "portal", "rumble", "lightning", "phoenix", "blizzard", "gravity", 
     "pain", "love", "spider", "sound", "soul", "quake", "creation" 
 }
----------------------------------
 
 local Players, RS, RunService = game:GetService("Players"), game:GetService("ReplicatedStorage"), game:GetService("RunService")
 local HttpService, VirtualUser = game:GetService("HttpService"), game:GetService("VirtualUser")
@@ -342,7 +444,6 @@ if env.BloxSM and env.BloxSM.Unload then pcall(env.BloxSM.Unload) end
 local S = { alive = true, started = false, nextRoll = 0, fails = 0, lastStatus = "", conns = {}, sessionEnd = 0, signaled = false, farmStopped = false, farmTries = 0, farmRetryAt = 0 }
 env.BloxSM = { Unload = function() S.alive = false end }
 
----------- UI MINIMAL ----------
 local gui = Instance.new("ScreenGui")
 gui.Name = "BloxFactoryUI" gui.ResetOnSpawn = false gui.DisplayOrder = 999
 local frame = Instance.new("Frame", gui)
@@ -363,7 +464,6 @@ local function SetStatus(t)
     if t ~= S.lastStatus then S.lastStatus = t lbl.Text = t print("[BloxSM] " .. t) end
 end
 
----------- AUTO PILIH TEAM ----------
 local GuiService, VIM = game:GetService("GuiService"), game:GetService("VirtualInputManager")
 local TEAM = (PREFERRED_TEAM == "Marines") and "Marines" or "Pirates"
 local STEM = (TEAM == "Pirates") and "pirate" or "marin"
@@ -515,7 +615,6 @@ task.spawn(function()
     end
 end)
 
----------- UTIL ----------
 local function IsHighTier(name)
     local l = string.lower(tostring(name))
     for _, k in ipairs(HIGH_TIER) do if string.find(l, k, 1, true) then return true end end
@@ -577,7 +676,6 @@ local function SendWebhook(url, title, desc, color)
     end
 end
 
----------- GACHA ----------
 local function RollFruit()
     local ok, res = pcall(function() return Remotes.CommF_:InvokeServer("Cousin", "Buy") end)
     if ok and res ~= nil and res ~= false then return res end
@@ -635,7 +733,6 @@ local function DoRoll()
     end
 end
 
----------- KILL SWITCH VXEZE HUB (v11 - Config Priority) ----------
 local FARM_STOP_BEFORE = 120
 local FARM_TEXTS    = { "mulai bertani", "start farming", "start farm" }
 local FARM_PATTERNS = { "farm", "bertani" }
@@ -760,14 +857,18 @@ end
 
 local function StopVxezeFarm()
     local ok, r, how = pcall(function()
-        -- 1. Config langsung (instan)
+        local bs = getgenv().BloxSea
+        if bs and bs.mode == "kaitun" then
+            local f = getgenv().KaitunStop
+            if type(f) == "function" then pcall(f) end
+            for _, fl in ipairs(EnvFarmFlags()) do fl.tbl[fl.key] = false end
+            return "off", "kaitun (hook/flag, belum terverifikasi)"
+        end
         local cfg = CfgTable()
         local wasOn = cfg ~= nil and cfg[CFG_KEY] == true
         local changed = cfg and CfgFarmOff(cfg) or 0
-        -- 2. flag ENV (fallback)
         local flags = EnvFarmFlags()
         for _, f in ipairs(flags) do f.tbl[f.key] = false end
-        -- 3. sinkron UI hanya bila saklar tampak ON
         local sw, row, clicked
         if FARM_UI_SYNC or not cfg then
             sw, row = GetFarmToggle()
@@ -793,68 +894,13 @@ local function StopVxezeFarm()
     return "error"
 end
 
-local function MoveSum(dur)
-    local c = LP.Character
-    local hrp = c and c:FindFirstChild("HumanoidRootPart")
-    if not hrp then return 0 end
-    local total, last, t0 = 0, hrp.Position, os.clock()
-    while os.clock() - t0 < dur do
-        task.wait(0.25)
-        if not hrp.Parent then break end
-        total += (hrp.Position - last).Magnitude
-        last = hrp.Position
-    end
-    return total
-end
-
-env.BloxSM.FarmDebug = function(mode)
-    local t0 = os.clock()
-    local lines = {}
-    local cfg = CfgTable()
-    if cfg then
-        lines[#lines + 1] = "Config[\"Start Farm\"] = " .. tostring(cfg[CFG_KEY])
-        local seen = 0
-        for k, v in next, cfg do
-            seen += 1
-            if seen > 600 then break end
-            if type(k) == "string" and v == true and NameIsFarm(k) then lines[#lines + 1] = "Config farm aktif: " .. k end
-        end
-    else
-        lines[#lines + 1] = "getgenv().Config tidak ada"
-    end
-    local flags = EnvFarmFlags()
-    for _, f in ipairs(flags) do lines[#lines + 1] = "ENV flag aktif: " .. f.key end
-    farmSw, farmRow = nil, nil
-    local sw, row = GetFarmToggle()
-    lines[#lines + 1] = sw and ("UI saklar: " .. sw:GetFullName() .. " ON=" .. tostring(FarmIsOn(sw, row))) or "UI saklar: tidak ketemu"
-    lines[#lines + 1] = string.format("waktu scan: %.2fs", os.clock() - t0)
-    if mode == "probe" and cfg then
-        local m1 = MoveSum(3)
-        CfgFarmOff(cfg)
-        task.wait(1.5)
-        local m2 = MoveSum(3)
-        local verdict = (m1 < 10) and "tidak bisa disimpulkan (karakter diam sebelum uji; jalankan saat farm aktif bergerak)"
-            or (m2 < 3 and "Config EFEKTIF (karakter berhenti) -> boleh set FARM_UI_SYNC = false")
-            or "Config TIDAK cukup (karakter masih bergerak) -> biarkan FARM_UI_SYNC = true"
-        lines[#lines + 1] = string.format("PROBE gerak sebelum=%.1f sesudah=%.1f => %s", m1, m2, verdict)
-        lines[#lines + 1] = "(farm dibiarkan mati; nyalakan lagi lewat UI)"
-    elseif mode == true then
-        local r, how = StopVxezeFarm()
-        lines[#lines + 1] = "STOP => " .. tostring(r) .. " (" .. tostring(how) .. ")"
-    end
-    for _, l in ipairs(lines) do print("[FarmDebug] " .. l) end
-    if type(writefile) == "function" then pcall(writefile, "FarmDebug_" .. UID .. ".txt", table.concat(lines, "\n")) end
-    SetStatus(string.format("FarmDebug: cfg=%s env=%d ui=%s", cfg and tostring(cfg[CFG_KEY]) or "-", #flags, sw and "ok" or "-"))
-end
-
----------- SEA GUARD (runtime) ----------
--- Kalau bukan di Sea 3 dan level cukup, pindah langsung lewat remote travel milik game (tanpa menunggu quest hub).
--- Setelah teleport, script dimuat ulang oleh autoexec dan config dihitung ulang berdasarkan Sea baru.
 local SEA_PLACES = { [2753915549] = 1, [4442272183] = 2, [7449423635] = 3 }
 local CUR_SEA = SEA_PLACES[game.PlaceId]
 local seaTries, seaNext = 0, 0
 local function SeaGuard()
     if CUR_SEA == nil or CUR_SEA == 3 or seaTries >= 6 or os.time() < seaNext then return end
+    local bs = getgenv().BloxSea
+    if not bs or bs.mode ~= "vxeze" then return end
     local d = LP:FindFirstChild("Data")
     local l = d and d:FindFirstChild("Level")
     local lv = l and tonumber(l.Value)
@@ -862,40 +908,135 @@ local function SeaGuard()
     local remote, label
     if lv >= 1500 then remote, label = "TravelZou", "Sea 3"
     elseif lv >= 700 and CUR_SEA == 1 then remote, label = "TravelDressrosa", "Sea 2" end
-    if not remote then seaTries = 99 SetStatus("Sea guard: level " .. lv .. " belum cukup untuk pindah sea") return end
+    if not remote then seaTries = 99 SetStatus("Sea guard: level " .. lv .. " belum cukup") return end
     seaTries += 1
     seaNext = os.time() + 45
     SetStatus("Sea guard: travel ke " .. label .. " (" .. seaTries .. "/6)")
     pcall(function() Remotes.CommF_:InvokeServer(remote) end)
 end
 
----------- LOOP ----------
+local ROT_FILE = "RotationState_" .. GROUP_ID .. ".txt"
+local ACC_FILE = "RotAcc_" .. GROUP_ID .. "_" .. UID .. ".txt"
+local function LoadRot()
+    local st = { t = ACCOUNT_TIME, adj = 0, exit = 0, exit_by = "", oh = 90 }
+    if type(isfile) == "function" and isfile(ROT_FILE) then
+        local ok, d = pcall(function() return HttpService:JSONDecode(readfile(ROT_FILE)) end)
+        if ok and type(d) == "table" then
+            for k in pairs(st) do if type(d[k]) == type(st[k]) then st[k] = d[k] end end
+        end
+    end
+    st.t = math.clamp(st.t, ACCOUNT_TIME, ACCOUNT_TIME_MAX)
+    return st
+end
+local function SaveRot(st)
+    if type(writefile) == "function" then pcall(writefile, ROT_FILE, HttpService:JSONEncode(st)) end
+end
+local function MarkExit()
+    local st = LoadRot()
+    st.exit, st.exit_by = os.time(), LP.Name
+    SaveRot(st)
+end
+local function RotationLearn(now)
+    local st = LoadRot()
+    local hasFS = type(isfile) == "function"
+    local accStart = hasFS and isfile(ACC_FILE) and tonumber(readfile(ACC_FILE)) or nil
+    local P = accStart and (now - accStart) or nil
+    local hasLast = hasFS and isfile(LAST_FILE)
+    local gap = st.exit > 0 and (now - st.exit) or nil
+    if gap and st.exit_by ~= LP.Name and gap > 0 and gap < 900 then
+        st.oh = math.floor(0.8 * st.oh + 0.2 * gap)
+    end
+    if P and hasLast and P >= MIN_VALID_P then
+        local alive = math.clamp(math.floor(P / (st.t + st.oh) + 0.5), 1, 20)
+        local epoch = alive * (st.t + st.oh)
+        local cooled = (now - st.adj) >= 0.8 * epoch
+        local R = S.nextRoll - now + ROLL_MARGIN
+        if R > 0 then
+            if st.t >= ACCOUNT_TIME_MAX then
+                warn("[Rotation:" .. GROUP_ID .. "] cooldown belum habis tapi ACCOUNT_TIME max")
+            elseif cooled then
+                local old = st.t
+                st.t = math.min(ACCOUNT_TIME_MAX, st.t + math.min(ROT_MAX_STEP, math.ceil(R / alive)))
+                st.adj = now
+                local msg = string.format("Skip terdeteksi (~%d akun hidup, kurang %ds): %.1f -> %.1f menit", alive, R, old / 60, st.t / 60)
+                warn("[Rotation:" .. GROUP_ID .. "] " .. msg) SetStatus(msg)
+            end
+        elseif R < -SLACK_DECAY and st.t > ACCOUNT_TIME and cooled then
+            local old = st.t
+            st.t = math.max(ACCOUNT_TIME, st.t - 60)
+            st.adj = now
+            local msg = string.format("Putaran longgar: %.1f -> %.1f menit", old / 60, st.t / 60)
+            warn("[Rotation:" .. GROUP_ID .. "] " .. msg) SetStatus(msg)
+        end
+    end
+    SaveRot(st)
+    if type(writefile) == "function" then pcall(writefile, ACC_FILE, tostring(now)) end
+    return st.t
+end
+
+local ACTIVE_FILE = "Active_" .. GROUP_ID .. ".txt"
+local lastHb, hbHits = 0, 0
+local function Heartbeat()
+    if type(isfile) ~= "function" or os.time() - lastHb < 30 then return end
+    lastHb = os.time()
+    pcall(function()
+        if isfile(ACTIVE_FILE) then
+            local uid, ts = string.match(readfile(ACTIVE_FILE), "^(%d+)|(%d+)$")
+            if uid and uid ~= UID and os.time() - tonumber(ts) < 45 then
+                hbHits += 1
+                if hbHits >= 2 then
+                    local msg = "GROUP_ID '" .. GROUP_ID .. "' dipakai tab lain! Ganti GROUP_ID per tab"
+                    warn("[Rotation:" .. GROUP_ID .. "] " .. msg) SetStatus(msg)
+                end
+            else hbHits = 0 end
+        end
+        writefile(ACTIVE_FILE, UID .. "|" .. os.time())
+    end)
+end
+local lvWatchNext, lvNotified = 0, false
+local function LevelWatch()
+    local bs = getgenv().BloxSea
+    if lvNotified or not bs or bs.mode ~= "kaitun" or os.time() < lvWatchNext then return end
+    lvWatchNext = os.time() + 60
+    local d = LP:FindFirstChild("Data")
+    local l = d and d:FindFirstChild("Level")
+    local lv = l and tonumber(l.Value)
+    if lv and lv >= LEVEL_VXEZE_MIN then
+        lvNotified = true
+        local msg = "Level " .. lv .. " >= " .. LEVEL_VXEZE_MIN .. ": Vxeze aktif di sesi berikutnya"
+        print("[Level Guard] " .. msg) SetStatus(msg)
+    end
+end
+
 local function Tick()
     if not S.started then return 1 end
+    Heartbeat()
+    LevelWatch()
     if S.signaled then return 10 end
     SeaGuard()
     local timeLeft = S.sessionEnd - os.time()
     if timeLeft <= FARM_STOP_BEFORE and not S.farmStopped and os.time() >= S.farmRetryAt then
-        SetStatus("Matikan farm Vxeze Hub...")
+        SetStatus("Matikan farm...")
         local r, how = StopVxezeFarm()
         S.farmTries += 1
         if r == "off" or r == "alreadyoff" or S.farmTries >= 4 then
             S.farmStopped = true
-            SetStatus(r == "off" and ("Farm Vxeze dimatikan (" .. tostring(how) .. ")") or r == "alreadyoff" and ("Farm Vxeze sudah mati (" .. tostring(how) .. ")") or ("Farm Vxeze: " .. tostring(r) .. " (menyerah)"))
+            SetStatus(r == "off" and ("Farm dimatikan (" .. tostring(how) .. ")") or r == "alreadyoff" and ("Farm sudah mati (" .. tostring(how) .. ")") or ("Farm: " .. tostring(r) .. " (menyerah)"))
         else
             S.farmRetryAt = os.time() + 10
-            SetStatus("Farm Vxeze: " .. r .. ", coba lagi 10s (" .. S.farmTries .. "/4)")
+            SetStatus("Farm: " .. r .. ", coba lagi 10s (" .. S.farmTries .. "/4)")
         end
     end
     if os.time() >= S.sessionEnd then
         S.signaled = true
+        MarkExit()
         if type(writefile) == "function" then pcall(writefile, LP.Name .. "_winterswap.json", '{"status":"done"}') end
         SetStatus("Selesai! Menunggu WinterHub ganti akun...")
         return 10
     end
     local rem = S.nextRoll - os.time()
     if rem <= 0 then DoRoll() return 1 end
-    if S.fails == 0 then SetStatus("Next Roll in: " .. math.ceil(rem / 60) .. " minutes | Sesi: " .. math.ceil((S.sessionEnd - os.time()) / 60) .. "m") end
+    if S.fails == 0 then SetStatus("Next Roll in: " .. math.ceil(rem / 60) .. " minutes | Sesi: " .. math.ceil((S.sessionEnd - os.time()) / 60) .. "m | " .. ((getgenv().BloxSea and getgenv().BloxSea.mode) or "?")) end
     return math.min(rem, 20)
 end
 
@@ -903,7 +1044,6 @@ local function Start()
     if S.started then return end
     btn.Visible = false
     frame.Size = UDim2.new(0, 230, 0, 32) lbl.Position = UDim2.new(0, 8, 0, 5)
-    
     local now = os.time()
     local endAt
     if type(isfile) == "function" and isfile(SESSION_FILE) then
@@ -920,7 +1060,7 @@ local function Start()
         end
     end
     if newSession then
-        endAt = now + ACCOUNT_TIME
+        endAt = now + RotationLearn(now)
         if type(writefile) == "function" then pcall(writefile, SESSION_FILE, tostring(endAt)) end
         pcall(function() local f = LP.Name .. "_winterswap.json" if isfile(f) then delfile(f) end end)
     end
@@ -940,7 +1080,6 @@ env.BloxSM.Start = Start
 env.BloxSM.ResetSession = function() if type(delfile) == "function" and isfile(SESSION_FILE) then delfile(SESSION_FILE) end end
 env.BloxSM.Stop = Stop
 
----------- BOOT ----------
 if type(isfile) == "function" and isfile(LAST_FILE) then
     S.nextRoll = (tonumber(readfile(LAST_FILE)) or 0) + ROLL_INTERVAL
 else
