@@ -3,17 +3,6 @@
   Layout: 0 Config | 1 Globals | 2 Core | 3 Webhook | 4 Group lock | 5 State store
           6 Rotation + Session | 7 Dead-session | 8 Vxeze loader | 9 Notification filter
           10 Input helpers | 11 Team | 12 Farm | 13 Gacha | 14 Sea guard | 14b Stats | 15 Dashboard | 16 Watchdog | 17 Boot
-
-  INTERFACES READ BY THE EXTERNAL SCHEDULER (do not change):
-    * Signal file : "<username>_winterswap.json"   containing {"status":"done"}  (written at session end)
-    * Session file: "SessionEnd_<Group>_<UID>.txt" containing a Unix timestamp
-
-  v21.2 changes
-    * Bug "farm idle at level >= 2200": beli config is now the LEVELING preset (complete schema) + a small override table
-      instead of a second, hand-copied preset; "Auto Load Script" is forced false in code; a progress-based idle verifier
-      (position / Beli / Exp / Level) escalates when the hub looks alive but nothing happens.
-    * Bug "Stats.learn times out": the remote is now CALIBRATED by firing one point per stat code and reading the
-      replicated levels (no hooks). The old hook-based learn stays as a fallback, now with a __namecall hook.
 ]]
 
 ----------------------------------------------------------------
@@ -22,124 +11,56 @@
 local CFG = {
     VERSION = "v21.2",
 
-    -- Webhooks: fill these in yourself. "REPLACE_ME" (or empty) = that target is disabled.
     WEBHOOKS = { 
-        fruit = "REPLACE_ME", 
-        report = "REPLACE_ME" 
+        fruit = "https://discord.com/api/webhooks/1561728793226383510/PeYJqeHWViBXqs4M0VowG9xM-zk3Uupk2ta8UtWNUqh_R2IQaPIsxMIgZEXNnbRdJ2CM", 
+        report = "https://discord.com/api/webhooks/1564228949033222204/E2n26s5XvL45E4c6Ylnozwb3cyi03QOyinAcltbcrKyAjzj8bLCGMVeDo4IR3mSeOCwd" 
     },
 
     VXEZE_URL       = "https://raw.githubusercontent.com/Dex-Bear/VxezeHubLoader/refs/heads/main/MainHub.lua",
-    LEVEL_VXEZE_MIN = 2200,        -- level >= this: "beli" config, below: "leveling" config
-    PREFERRED_TEAM  = "Pirates",   -- "Pirates" or "Marines"
-
-    -- Beli mode config = leveling preset + BELI_OVERRIDES. true = also re-apply BELI_LEGACY_UI (keys of the old beli
-    -- preset that v21.2 drops as suspects: Boost Fps, Fps Cap, Interface *, Select Zone).
+    LEVEL_VXEZE_MIN = 2200,
+    PREFERRED_TEAM  = "Pirates",
     BELI_KEEP_LEGACY_UI = false,
 
-    -- Farm idle verifier. A cyan toggle only proves the UI state, so we watch real progress and escalate without it.
     IDLE = {
-        ENABLED = true,
-        CHECK = 5,
-        GRACE = 90,              -- seconds after the hub loaded before the first judgement
-        AFTER = 90,              -- no progress for this long = stage 1 (re-assert config + toggle Start Farm in the config)
-        STAGE_WAIT = 90,         -- extra idle time before each next stage
-        MOVE_STUDS = 12,         -- moving farther than this from the anchor counts as progress
-        FALLBACK_METHODS = { "Bone" }, -- stage 2: "Select Method Farm" values to try in order. UNTESTED guess, set {} to disable
-        GIVEUP_DEAD = true,      -- stage 3: report the session as dead so the scheduler rotates away from this account
-        DRIFT_AFTER = 45,        -- seconds after the hub loaded: log (and re-assert) config keys the hub changed behind our back
+        ENABLED = true, CHECK = 5, GRACE = 90, AFTER = 90, STAGE_WAIT = 90,
+        MOVE_STUDS = 12, FALLBACK_METHODS = { "Bone" }, GIVEUP_DEAD = true, DRIFT_AFTER = 45,
     },
 
-    -- Gacha
-    ROLL_INTERVAL = 7200,          -- gacha cooldown in seconds
-    ROLL_MARGIN   = 60,            -- safety cushion on top of the cooldown
-    LOW_BELI      = 5000000,       -- below this the report is flagged LOW BELI
-
-    -- Session / adaptive rotation timer
-    SESSION_BASE     = 960,        -- default seconds per account (16 min)
-    SESSION_MAX      = 2400,       -- upper bound the adaptive timer may reach
-    SESSION_GRACE    = 180,        -- rejoin within this many seconds after expiry = same session
-    MIN_VALID_P      = 1200,       -- a rotation period shorter than this is a manual restart, ignore it
-    ROT_MAX_STEP     = 180,        -- max seconds the timer may grow per adjustment
-    SLACK_DECAY      = 1800,        -- roll ready this long before our turn = rotation too loose, shrink
-    BOOTSTRAP_CYCLES = 3,          -- first N measured cycles converge faster (bigger steps, no cooldown guard)
-    SIGNAL_ALERT_AFTER = 600,      -- signal file still not consumed this long after writing: alert (never rewritten)
-    SIGNAL_WRITE_TRIES = 3,        -- write + read-back attempts for the signal file
-    ROT_BAD_LIMIT    = 3,          -- consecutive too-short cycles before the timer jumps analytically
-    START_MAX_WAIT   = 120,        -- start the session clock even if no character spawned after this long
-    GROUP_WAIT_MAX   = 40,         -- max wait for group lock before starting a NEW session
-
-    -- Dead-session handling
-    DEAD_NO_CHAR = 240,            -- no character for this long (after session start) = dead session
-    DEAD_ON_ERROR = true,          -- Roblox error prompt (kick/disconnect) = dead session
-    AUTO_REJOIN   = true,          -- try to rejoin if still alive this long after a dead-session signal
-    REJOIN_AFTER  = 150,
-
-    -- Farm control
-    FARM_STOP_BEFORE = 120,        -- stop Vxeze farm this many seconds before the session ends
-    FARM_ON_MAX      = 3,          -- auto-start attempts per window
-
-    -- Group lock
-    MAX_GROUPS = 20, LOCK_REFRESH = 10, LOCK_STALE = 120, PROBE_WAIT = 25,   -- WHY: must be >2x LOCK_REFRESH, a throttled instance can miss one refresh and look dead
-    LOCK_RETRY_MAX = 300,
-
-    -- Webhook manager
+    ROLL_INTERVAL = 7200, ROLL_MARGIN = 60, LOW_BELI = 5000000,
+    SESSION_BASE = 960, SESSION_MAX = 2400, SESSION_GRACE = 180, MIN_VALID_P = 1200, ROT_MAX_STEP = 180,
+    SLACK_DECAY = 1800, BOOTSTRAP_CYCLES = 3, SIGNAL_ALERT_AFTER = 600, SIGNAL_WRITE_TRIES = 3,
+    ROT_BAD_LIMIT = 3, START_MAX_WAIT = 120, GROUP_WAIT_MAX = 40,
+    DEAD_NO_CHAR = 240, DEAD_ON_ERROR = true, AUTO_REJOIN = true, REJOIN_AFTER = 150,
+    FARM_STOP_BEFORE = 120, FARM_ON_MAX = 3,
+    MAX_GROUPS = 20, LOCK_REFRESH = 10, LOCK_STALE = 120, PROBE_WAIT = 25, LOCK_RETRY_MAX = 300,
     WH_BURST = 5, WH_PER_MIN = 20, WH_QUEUE_MAX = 40, WH_MAX_TRIES = 6, WH_ORPHAN_AFTER = 180,
-
-    -- Vxeze loader
     VX_MAX_ATTEMPTS = 6, VX_UI_TIMEOUT = 150, VX_MAX_RELOADS = 3,
+    NOTI_BLOCK_ALL  = true, NOTI_PATTERNS = { "kill", "boss" }, NOTI_NAME_KEYS = { "noti", "toast", "popup" }, NOTI_DISABLE_KEYS = { "Noti Profile" },
 
-    -- Notifications
-    NOTI_BLOCK_ALL  = true,        -- true = drop every SetCore "SendNotification" (same as v19)
-    NOTI_PATTERNS   = { "kill", "boss" },
-    NOTI_NAME_KEYS  = { "noti", "toast", "popup" },
-    NOTI_DISABLE_KEYS = { "Noti Profile" },   -- Vxeze config keys forced to false (explicit list, see ApplyOverrides)
-
-    -- Stats allocation. Off by default. With ENABLED = true the remote is calibrated automatically (AUTO_PROBE) the first time
-    -- 5+ points are unspent; or run env.BloxSM.StatsProbe() by hand. env.BloxSM.StatsHookTest() tells whether hooks work here.
     STATS = {
         ENABLED = false,
-        PRIORITY = {               -- filled in this order: a stat gets points until its cap, then the next one
-            { stat = "Melee", cap = 2550 }, { stat = "Defense", cap = 2550 }, { stat = "Sword", cap = 2550 },
-            { stat = "Gun", cap = 2550 }, { stat = "Demon Fruit", cap = 2550 } },   -- 2550 is an assumed cap, adjust it
-        RESERVE = 0,               -- points to leave unspent
-        BATCH_MAX = 25,            -- max single-point calls per cycle (only for remotes without an amount argument)
-        SEND_DELAY = 0.15,         -- pause between single-point calls
-        VERIFY_TIMEOUT = 3,        -- seconds to wait for the replicated value to move
-        PAUSE_FOREIGN = 600,       -- pause this long after another allocator was detected
-        ARG_NAMES = {},            -- optional override of the stat argument, e.g. { ["Demon Fruit"] = "Blox Fruit" }
-        REMOTE_FILE = "BloxStatsRemote.json",   -- learned remote, shared by all accounts (the remote is game-wide)
-        AUTO_PROBE = true,         -- calibrate by firing one point per code in PROBE_CODES and reading the replicated levels (no hooks)
-        REMOTE_PATH = "Backpack.BackpackFrame.StatsFrame.AddingPoints.LocalScript.RemoteEvent", -- relative to PlayerGui
-        PROBE_CODES = { "Str", "Vit", "Int", "SP", "Agi" }, -- the FIRST one must be a code known to work (it decides if a call shape is right)
-        PROBE_SHAPES = {           -- "{stat}" is replaced by the code; shapes are tried in order
-            { "AddPoints", 0.5, "{stat}" },   -- shape observed in the game UI
-            { "AddPoints", 1, "{stat}" },
-            { "AddPoints", "{stat}", 1 } },
-        WATCH_REMOTE = false,      -- install hooks to pause when ANOTHER script fires the remote (value checks already catch most cases)
-        LEARN_SECONDS = 120,       -- window of the hook-based StatsLearn fallback
+        PRIORITY = { { stat = "Melee", cap = 2550 }, { stat = "Defense", cap = 2550 }, { stat = "Sword", cap = 2550 }, { stat = "Gun", cap = 2550 }, { stat = "Demon Fruit", cap = 2550 } },
+        RESERVE = 0, BATCH_MAX = 25, SEND_DELAY = 0.15, VERIFY_TIMEOUT = 3, PAUSE_FOREIGN = 600, ARG_NAMES = {},
+        REMOTE_FILE = "BloxStatsRemote.json", AUTO_PROBE = true,
+        REMOTE_PATH = "Backpack.BackpackFrame.StatsFrame.AddingPoints.LocalScript.RemoteEvent",
+        PROBE_CODES = { "Str", "Vit", "Int", "SP", "Agi" },
+        PROBE_SHAPES = { { "AddPoints", 0.5, "{stat}" }, { "AddPoints", 1, "{stat}" }, { "AddPoints", "{stat}", 1 } },
+        WATCH_REMOTE = false, LEARN_SECONDS = 120,
     },
 
-    -- Misc
-    SEA_GUARD = true, RENDER_OFF = true, FPS_CAP = 10,
-    LOG_MAX_BYTES = 65536, STALL_AFTER = 120,
+    SEA_GUARD = true, RENDER_OFF = true, FPS_CAP = 10, LOG_MAX_BYTES = 65536, STALL_AFTER = 120,
 }
 
--- Same list as v19. Matching is now word-based (see IsHighTier).
 local HIGH_TIER = { "dragon","leopard","kitsune","dough","venom","shadow","control","spirit","mammoth","t-rex","trex",
     "gas","yeti","tiger","magnet","celestial","oni","crimson","skins","gold","east","west","buddha","portal","rumble",
     "lightning","phoenix","blizzard","gravity","pain","love","spider","sound","soul","quake","creation" }
 
--- Carried over verbatim from v19 (Vxeze Hub config table).
 local function GetVxezeLevelConfig()
     return {
         ["Auto Fire Shoot Heart Leviathan"]=false,["Auto Farm Mastery 600 Gun In Inventory"]=false,["Auto Finish Train Draco Quest"]=false,["Auto Dodge Skill Seabeast"]=false,["Account Help"]=false,["Auto Reset When Complete Volcano"]=false,["Ignore Craft Volcanic Magnet"]=false,["Auto Trade Azure Ember"]=false,["Quest"]={["Race V2-V3"]=true,["Haki Rainbow"]=true},["Value Speed Fly Boat"]=3,["Hop Find Full Moon"]=false,["Auto Trial Draco"]=false,["Auto Aimbot Gun"]=false,["Fruits v2 Account Help"]=false,["Auto New World"]=false,["Drive Boat To Hydra"]=false,["Auto Summon Soul Ember"]=false,["Summon Dough King"]=false,["Auto Store Fruit"]=false,["Auto Sell Fishing"]=false,["Auto Get Fully Cyborg"]=false,["Use Click M1 Skull Guitar Leviathan"]=false,["Walk On Water"]=true,["ESP Island"]=false,["Multi Find Leviathan"]=false,["Auto Magnet Event"]=false,["Auto Buy Boat Beast Hunter"]=false,["Auto Get Rainbow Haki"]=false,["Boost Fps"]=false,["Fruits"]={["Farm Mastery Fruits"]=true,["Fruits Eat"]={"Gravity-Gravity","Pain-Pain"},["Auto Eat Fruits"]=false},["Auto Spawn Kitsune Island"]=false,["Auto Dragon Talon"]=false,["Change JumpPower"]=false,["Skill X Melee"]=0.5,["Hop Server [ Haki Color / Legendary Sword ]"]=false,["Hop Server Elite Hunter"]=false,["Auto Upgrade Sword Inventory"]=false,["Random Devil Fruit"]=false,["Auto Secret Quest"]=false,["Auto Aimbot"]=false,["Kill All Boss"]=false,["Sharkman Need Fish"]=false,["Use Your Boat Beast Hunter"]=false,["Min Player Join Dungeon"]=2,["Auto Yoru Mini (Hop Server)"]=false,["Auto Farm Observation"]=false,["Use Dragonstorm For Sea Event"]=false,["Auto Touch Pad Haki"]=false,["Attack Dough King"]=false,["Auto Yoru Mini"]=false,["Setup Kaitun v4 [ Fully ]"]=false,["Tween Safe if have Items"]=false,["Kill Aura Only Raid And Volcano"]=false,["Auto Get Ghoul"]=false,["Auto Finish Train Quest"]=false,["Skill F Blox Fruit"]=0.5,["Account Main"]=false,["Auto Get Cyborg"]=false,["Skill C Blox Fruit"]=0.5,["Auto Turn On V3 Near Door"]=false,["Auto Factory"]=false,["White Screen"]=false,["Notify Event Auto Refresh"]=false,["Auto Sharkman Karate V3"]=false,["Auto Dodge Skill Terrorshark"]=false,["Hop Find Boss [ Cake Prince / Tyrant of the Skies ]"]=false,["Auto TTK"]=false,["Use Click M1 Fruit Leviathan"]=false,["Auto Change Dragonstorm With Kill Leviathan"]=false,["Auto Raid"]=false,["% Health Player"]=40,["Auto Craft Haki Color [ Fully ]"]=false,["Auto Third World"]=false,["MiscItem"]={["Pole1st"]=true,["Dragon Trident"]=true,["Rengoku"]=true,["Spikey Trident"]=true,["Buddy"]=true,["Feathered Visage"]=true,["Gravity Blade"]=true,["Venom Bow"]=true,["Canvander"]=true,["Twin Hooks"]=true},["Kill Boss"]=false,["Auto Click"]=true,["Teleport Boat Other CFrame if Rough Sea"]=false,["Auto Electric Claw"]=false,["Speed Boat Auto Drive"]=300,["Auto Shark Anchor [ Fully ]"]=false,["Auto Pirate Raid"]=false,["Accept Quest [ Cake / Bone / Tiki ]"]=false,["Skill Z Sword"]=0.5,["Auto Collect Fruits"]=false,["Teleport To Kitsune Island"]=false,["Time Hop Server"]=5,["Will Back When over 10km"]=false,["Skill Z Gun"]=0.5,["Auto Find Leviathan"]=false,["Value Collect Chest to Hop"]=20,["Hop Find Fruits / Berries / Chests"]=false,["Auto Sea Event"]=false,["Auto Stats"]=false,["Select Weapon"]="Melee",["Auto Sanguine Art"]=false,["Kill Aura With DragonStorm"]=false,["Auto Get Observation v1-2 [ Fully ]"]=false,["Farm Mob"]=false,["Use Click M1 Skull Guitar For Sea Event"]=false,["Auto CDK"]=false,["Auto Crafting Volcanic Magnet"]=false,["Hop Sever Raid"]=false,["Auto Turn On Observation"]=true,["Speed Tween"]=177,["Auto Join Dungeon"]=false,["Setting"]={["White Screen"]=false,["UiCheckItem"]=false},["Attack Darkbeard"]=false,["Auto Dodge Skill Mobs"]=false,["No Fog"]=false,["Auto Change Dragonstorm When Kill Boat"]=false,["Auto Turn On V3"]=false,["Tween Boat To Frozen Dimension"]=false,["Distance Teleport Y"]=0,["Skill Z Melee"]=0.5,["Select Method Farm"]="Level",["Just Use Skill when Player Active Ken"]=false,["Value Speed Tween Boat"]=250,["Dough King [ Fully ]"]=false,["Auto Start Leviathan"]=false,["ESP Berry"]=false,["Auto Multi Raid"]=false,["Auto Advanced Combat"]=false,["Change WalkSpeed"]=false,["Auto Pull Lever"]=false,["Auto Sharkman Karate"]=false,["Auto Buy Spy"]=false,["Auto Tushita"]=false,["Ignore Craft Volcanic Magnet Draco"]=false,["Auto Destroy IDK"]=false,["Ignore Boss"]=false,["Value Damage Multi Segments"]=30000,["Fully Trial Draco"]=false,["Auto Dojo Trainer"]=false,["Auto Trial"]=false,["Account Buy Chip"]=false,["Auto Get Cyborg Hop Collect Chest"]=false,["Kill players When complete Trial"]=false,["Time Delay Kill"]=5,["Use skill fast dont hold"]=false,["Auto Collect Bone"]=false,["Webhook Find Prehistoric Island"]=false,["Auto Get Full Melee [ Fully ]"]=false,["Use Click M1 Fruit For Sea Event"]=false,["Notify Event Only Current Sea"]=true,["Values Azure Ember"]=10,["Auto Turn On V4"]=false,["Input WalkSpeed"]=200,["Hop Server Kitsune Island"]=false,["Auto Pick Card Dungeon"]=false,["Spam Join"]=false,["Auto Farm Mastery 600 Sword In Inventory"]=false,["Auto Collect Chests"]=false,["Summon Soul Reaper"]=false,["Auto Yama"]=false,["Summon Darkbeard"]=false,["Buy Blox Fruit Sniper Shop"]=false,["Random Magnet Event"]=false,["Auto Trade Bone"]=false,["Hop Find Mirage Island [ Pull Lever ]"]=false,["Auto Open Chest"]=false,["Attack Multi Segments Leviathan"]=false,["Auto Saber"]=false,["Change Speed Boat"]=false,["Auto Buy Chip and Attack Law"]=false,["Auto Reset Vip Leviathan"]=false,["Collect Chest When Server Spawn Legend Items"]=false,["Distance Farm Aura"]=5000,["Auto Soul Guitar"]=false,["Hop Find Darkbeard"]=false,["Hop Server When Farm Observation"]=false,["Hop Server Find Boss"]=false,["Remove Notifications"]=true,["Auto Buy Chip For Account Select"]=false,["Farm Mastery"]=false,["Skill Z Blox Fruit"]=0.5,["Webhook Upgrade V4 + Train"]=false,["Auto Load Script"]=false,["Teleport Y"]=false,["Auto Upgrade Race V2-V3"]=false,["Drive Boat To Tiki"]=false,["Hop Find Dough King"]=false,["Auto Return Dungeon"]=false,["Select Skills Melee"]={["X"]=true,["C"]=true,["Z"]=true},["Skill X Blox Fruit"]=0.5,["Auto Observation v2"]=false,["Auto Slap Battle"]=false,["Select Skills Blox Fruit"]={["X"]=true,["C"]=true,["Z"]=true,["V"]=true,["F"]=true},["Skill C Melee"]=0.5,["Bring Mob Count"]=6,["Teleport Frozen Dimension"]=false,["Auto Awake Fruit"]=false,["Black Screen"]=false,["Auto Collect Soul Ember"]=false,["Auto Repair Ur Ship"]=false,["Attack Soul Reaper"]=false,["Account Start Dungeon"]=false,["Auto Dragon Hunter"]=false,["Auto Attack Leviathan"]=false,["Stack Train With Trial Race"]=false,["Auto rejoin Disconnect"]=false,["Fly Boat"]=false,["Auto Find Mirage"]=false,["Bring Mob"]=true,["Teleport Player"]=false,["Account Pick Slot Raid"]=false,["Attack No Animation"]=true,["Darkbeard [ Fully ]"]=false,["Auto Fishing"]=false,["Auto Choose Gear Draco"]=false,["Tween Until Have Sea Event"]=false,["Start Farm"]=true,["Auto Buy Gear Draco"]=false,["Auto Get Draco"]=false,["Webhook Destroy IDK"]=false,["Hop Server Get Ghoul"]=false,["Auto Choose Gears"]=false,["Teleport Acient Clock"]=false,["Auto Summon Rip Indra"]=false,["Auto Reset Character"]=false,["Auto Attack Dungeon"]=false,["Skill X Gun"]=0.5,["Auto Elite Hunter"]=false,["Auto Tween To Event Fishing Spot"]=false,["ESP Fruit"]=false,["Auto Buy Legendary Sword"]=false,["Auto Change Dragonstorm With Skull Guitar"]=false,["Noclip"]=false,["Get Fruit In Inventory Low Beli"]=false,["Attack Rip Indra"]=false,["Farm Material"]=false,["Ping Discord"]=false,["Use Portal Fruit Teleport"]=false,["Select Skills Gun"]={["Z"]=true,["X"]=true},["Skill X Sword"]=0.5,["Reset Character Buy Boat"]=false,["Auto Collect Berries"]=false,["Auto Turn On Buso"]=true,["Health %"]=40,["Webhook Store Fruit"]=false,["Auto Quest Fruits v2"]=false,["Auto Sea Event With Friend"]=false,["Auto Upgrade Dragon Talon"]=false,["Auto Farm Mastery 600 Melees"]=false,["Auto Upgrade Gun Inventory"]=false,["Auto God Human"]=false,["Select Skills Sword"]={["Z"]=true,["X"]=true},["Prevent Security Kick"]=true,["Auto Event Prehistoric Island"]=false,["Hidden Hop Dead Hour"]=true,["Use Skill when Kill Player"]=false,["Fully Event Prehistoric Island"]=false,["Auto Super Human"]=false,["Auto Collect Egg"]=false,["Auto Death Step"]=false,["ESP Player"]=false,["Change Size Reel"]=false,["Webhook"]={["Enable"]=false,["UrlWebhook"]=""},["Input JumpPower"]=200,["Ignore Collect Bone"]=false,["MainItem"]={["Hallow Scythe"]=true,["Get 3 Legendary Colors Haki"]=true,["Skull Guitar"]=true,["Cursed Dual Katana"]=true,["GodHuman"]=true,["Saber"]=true},["Auto Find Prehistoric Island"]=false,["Auto Buy Gear"]=false,["Noti Profile"]=false,["Skill V Blox Fruit"]=0.5,["Webhook Find Leviathan"]=false,["Webhook Find Mirage"]=false,["Auto Buy Haki Color Recipe"]=false,["Auto Upgrade Race V2-V3 Draco"]=false,["Auto Accept Quest Fishing"]=false,["Value Speed Boat"]=200
     }
 end
 
--- Level >= LEVEL_VXEZE_MIN ("beli" mode) runs the leveling preset above (the complete, known-good schema, including the
--- nested tables Quest / Fruits / MiscItem / MainItem / Setting / Webhook) with only these keys changed.
--- WHY: the v21.1 beli preset was a second hand-copied table that LACKED those six tables. A hub that indexes one of them
--- raises inside its farm thread after building its UI, which looks exactly like "toggle is on, character stands still".
 local BELI_OVERRIDES = {
     ["Select Method Farm"] = "Cake",
     ["Accept Quest [ Cake / Bone / Tiki ]"] = true,
@@ -154,7 +75,6 @@ local BELI_OVERRIDES = {
     ["Distance Teleport Y"] = 800,
 }
 
--- Keys only the old beli preset had. "Select Mob" (a Sea 2 mob, "Factory Staff") is dropped for good: it is meaningless in Sea 3.
 local BELI_LEGACY_UI = {
     ["Boost Fps"] = true,
     ["Fps Cap"] = 10,
@@ -2172,3 +2092,99 @@ function Watch.statusFile()
 end
 
 ----------------------------------------------------------------
+-- 16. WATCHDOG
+----------------------------------------------------------------
+Watch.warned = {}
+function Watch.tick()
+    for name, t in pairs(S.beats) do
+        local age = os.clock() - t
+        if age > CFG.STALL_AFTER and not Watch.warned[name] then
+            Watch.warned[name] = true
+            Log.add("E", "service '" .. name .. "' has not reported for " .. math.floor(age) .. "s")
+        elseif age <= CFG.STALL_AFTER then Watch.warned[name] = nil end
+    end
+    Log.flush()
+    Store.save()
+    return 15
+end
+
+----------------------------------------------------------------
+-- 17. BOOT
+----------------------------------------------------------------
+local function Unload()
+    if not S.alive then return end
+    S.alive = false
+    Group.release()
+    env.BloxStatsHot, env.BloxStatsSpy = false, nil
+    Log.add("I", "unloading")
+    Log.flush() Store.save(true) WH.saveOutbox()
+    for _, c in ipairs(S.conns) do pcall(function() c:Disconnect() end) end
+    pcall(function() UI.gui:Destroy() end)
+    if CFG.RENDER_OFF then pcall(function() RunService:Set3dRenderingEnabled(true) end) end
+end
+
+env.BloxSM = {
+    Version = CFG.VERSION, Unload = Unload, Start = Sess.start, Stop = Sess.stop,
+    ResetSession = function() FS.delete(Sess.filePath()) Log.add("I", "session file deleted") end,
+    Status = function() print(UI.text) return UI.text end,
+    StatsLearn = Stats.learn,
+    StatsProbe = Stats.probeNow,
+    StatsHookTest = function() Task.spawn("stats-hooktest", Stats.hookTest) end,
+    StatsDump = function() Stats.dumped = false Stats.dumpLayout() end,
+    StatsPlan = function()
+        local p, lv = Stats.read()
+        if not p and Stats.bind() then p, lv = Stats.read() end
+        if not p then print("[BloxSM] stats values not found") return end
+        local plan, left = Stats.plan(p, lv, CFG.STATS.PRIORITY, CFG.STATS.RESERVE)
+        for _, s in ipairs(plan) do print("[BloxSM] plan: " .. s.stat .. " +" .. s.n) end
+        print("[BloxSM] points " .. p .. ", unspent after plan " .. left)
+    end,
+}
+
+UI.build()
+Store.load()
+WH.loadOutbox()
+Group.changeHooks[#Group.changeHooks + 1] = Sess.migrate
+Log.add("I", CFG.VERSION .. " booting for " .. LP.Name)
+
+if CFG.RENDER_OFF then
+    pcall(function() RunService:Set3dRenderingEnabled(false) end)
+    pcall(function() if setfpscap then setfpscap(CFG.FPS_CAP) end end)
+    pcall(function() settings().Rendering.QualityLevel = 1 end)
+end
+S.conns[#S.conns + 1] = LP.Idled:Connect(function() VirtualUser:CaptureController() VirtualUser:ClickButton2(Vector2.new()) end)
+if CFG.DEAD_ON_ERROR then
+    S.conns[#S.conns + 1] = GuiService.ErrorMessageChanged:Connect(function()
+        local m = GuiService:GetErrorMessage()
+        if m and m ~= "" then Dead.mark("error prompt: " .. m) end
+    end)
+end
+
+Group.acquire()
+Noti.boot()
+Vx.boot()
+Task.service("team", 1, Team.tick)
+Task.service("group-lock", CFG.LOCK_REFRESH, function() Group.refresh() end)
+for target in pairs(WH.queues) do Task.service("webhook-" .. target, 1, function() return WH.pump(target) end) end
+Task.service("webhook-adopt", 60, function() WH.adopt() end)
+Task.service("session-guard", 3, Sess.guard)
+Task.service("dead-watch", 10, Dead.watch)
+Task.service("farm", 3, Farm.tick)
+Task.service("hub-watch", 15, Farm.hubWatch)
+Task.service("farm-verify", CFG.IDLE.CHECK, Farm.verify)
+Task.service("cfg-drift", 10, Vx.driftTick)
+Task.service("gacha", 3, Gacha.tick)
+Task.service("sea-guard", 10, Sea.tick)
+Task.service("stats", 5, Stats.tick)
+Task.service("ui", 2, UI.render)
+Task.service("status-file", 15, Watch.statusFile)
+Task.service("watchdog", 15, Watch.tick)
+
+Task.spawn("session-boot", function()
+    local t0 = os.clock()
+    while S.alive and not hasHRP() and os.clock() - t0 < CFG.START_MAX_WAIT do task.wait(1) end
+    task.wait(5)
+    local g0 = os.clock()
+    while S.alive and not Group.ready and os.clock() - g0 < CFG.GROUP_WAIT_MAX do task.wait(0.5) end
+    if S.alive then Sess.start() end
+end)
