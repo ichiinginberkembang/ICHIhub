@@ -1,8 +1,5 @@
 --[[
   BloxFactory v21.2 (Android + Delta Executor)
-  Layout: 0 Config | 1 Globals | 2 Core | 3 Webhook | 4 Group lock | 5 State store
-          6 Rotation + Session | 7 Dead-session | 8 Vxeze loader | 9 Notification filter
-          10 Input helpers | 11 Team | 12 Farm | 13 Gacha | 14 Sea guard | 14b Stats | 15 Dashboard | 16 Watchdog | 17 Boot
 ]]
 
 ----------------------------------------------------------------
@@ -10,22 +7,15 @@
 ----------------------------------------------------------------
 local CFG = {
     VERSION = "v21.2",
-
     WEBHOOKS = { 
         fruit = "https://discord.com/api/webhooks/1561728793226383510/PeYJqeHWViBXqs4M0VowG9xM-zk3Uupk2ta8UtWNUqh_R2IQaPIsxMIgZEXNnbRdJ2CM", 
         report = "https://discord.com/api/webhooks/1564228949033222204/E2n26s5XvL45E4c6Ylnozwb3cyi03QOyinAcltbcrKyAjzj8bLCGMVeDo4IR3mSeOCwd" 
     },
-
     VXEZE_URL       = "https://raw.githubusercontent.com/Dex-Bear/VxezeHubLoader/refs/heads/main/MainHub.lua",
     LEVEL_VXEZE_MIN = 2200,
     PREFERRED_TEAM  = "Pirates",
     BELI_KEEP_LEGACY_UI = false,
-
-    IDLE = {
-        ENABLED = true, CHECK = 5, GRACE = 90, AFTER = 90, STAGE_WAIT = 90,
-        MOVE_STUDS = 12, FALLBACK_METHODS = { "Bone" }, GIVEUP_DEAD = true, DRIFT_AFTER = 45,
-    },
-
+    IDLE = { ENABLED = true, CHECK = 5, GRACE = 90, AFTER = 90, STAGE_WAIT = 90, MOVE_STUDS = 12, FALLBACK_METHODS = { "Bone" }, GIVEUP_DEAD = true, DRIFT_AFTER = 45 },
     ROLL_INTERVAL = 7200, ROLL_MARGIN = 60, LOW_BELI = 5000000,
     SESSION_BASE = 960, SESSION_MAX = 2400, SESSION_GRACE = 180, MIN_VALID_P = 1200, ROT_MAX_STEP = 180,
     SLACK_DECAY = 1800, BOOTSTRAP_CYCLES = 3, SIGNAL_ALERT_AFTER = 600, SIGNAL_WRITE_TRIES = 3,
@@ -36,7 +26,6 @@ local CFG = {
     WH_BURST = 5, WH_PER_MIN = 20, WH_QUEUE_MAX = 40, WH_MAX_TRIES = 6, WH_ORPHAN_AFTER = 180,
     VX_MAX_ATTEMPTS = 6, VX_UI_TIMEOUT = 150, VX_MAX_RELOADS = 3,
     NOTI_BLOCK_ALL  = true, NOTI_PATTERNS = { "kill", "boss" }, NOTI_NAME_KEYS = { "noti", "toast", "popup" }, NOTI_DISABLE_KEYS = { "Noti Profile" },
-
     STATS = {
         ENABLED = false,
         PRIORITY = { { stat = "Melee", cap = 2550 }, { stat = "Defense", cap = 2550 }, { stat = "Sword", cap = 2550 }, { stat = "Gun", cap = 2550 }, { stat = "Demon Fruit", cap = 2550 } },
@@ -47,7 +36,6 @@ local CFG = {
         PROBE_SHAPES = { { "AddPoints", 0.5, "{stat}" }, { "AddPoints", 1, "{stat}" }, { "AddPoints", "{stat}", 1 } },
         WATCH_REMOTE = false, LEARN_SECONDS = 120,
     },
-
     SEA_GUARD = true, RENDER_OFF = true, FPS_CAP = 10, LOG_MAX_BYTES = 65536, STALL_AFTER = 120,
 }
 
@@ -62,25 +50,13 @@ local function GetVxezeLevelConfig()
 end
 
 local BELI_OVERRIDES = {
-    ["Select Method Farm"] = "Cake",
-    ["Accept Quest [ Cake / Bone / Tiki ]"] = true,
-    ["Ignore Boss"] = true,
-    ["% Health Player"] = 71,
-    ["Time Delay Kill"] = 3,
-    ["Speed Tween"] = 181,
-    ["Input JumpPower"] = 251,
-    ["Value Damage Multi Segments"] = 131411,
-    ["Speed Boat Auto Drive"] = 349,
-    ["Skill C Melee"] = 0,
-    ["Distance Teleport Y"] = 800,
+    ["Select Method Farm"] = "Cake", ["Accept Quest [ Cake / Bone / Tiki ]"] = true, ["Ignore Boss"] = true,
+    ["% Health Player"] = 71, ["Time Delay Kill"] = 3, ["Speed Tween"] = 181, ["Input JumpPower"] = 251,
+    ["Value Damage Multi Segments"] = 131411, ["Speed Boat Auto Drive"] = 349, ["Skill C Melee"] = 0, ["Distance Teleport Y"] = 800,
 }
 
 local BELI_LEGACY_UI = {
-    ["Boost Fps"] = true,
-    ["Fps Cap"] = 10,
-    ["Interface Scale"] = 90,
-    ["Interface Text Boost"] = 0,
-    ["Select Zone"] = "Zone 3"
+    ["Boost Fps"] = true, ["Fps Cap"] = 10, ["Interface Scale"] = 90, ["Interface Text Boost"] = 0, ["Select Zone"] = "Zone 3"
 }
 
 ----------------------------------------------------------------
