@@ -3411,19 +3411,78 @@ end
 function UI.build()
     local gui = Instance.new("ScreenGui")
     gui.Name, gui.ResetOnSpawn, gui.DisplayOrder = "BloxFactoryUI", false, 999
+
+    -- Frame utama (Diperbesar dari 250x96 jadi 340x160)
     local frame = Instance.new("Frame", gui)
-    frame.Size, frame.Position = UDim2.new(0, 250, 0, 96), UDim2.new(0, 6, 0, 40)
-    frame.BackgroundColor3, frame.BackgroundTransparency = Color3.fromRGB(25, 25, 30), 0.2
-    Instance.new("UICorner", frame).CornerRadius = UDim.new(0, 8)
+    frame.Size = UDim2.new(0, 340, 0, 160)
+    frame.Position = UDim2.new(0, 15, 0, 30)
+    frame.BackgroundColor3 = Color3.fromRGB(20, 20, 25)
+    frame.BackgroundTransparency = 0.1
+    frame.BorderSizePixel = 0
+
+    -- Ujung melengkung
+    Instance.new("UICorner", frame).CornerRadius = UDim.new(0, 10)
+
+    -- Garis pinggir (Stroke) warna neon
+    local stroke = Instance.new("UIStroke", frame)
+    stroke.Color = Color3.fromRGB(0, 255, 170) -- Warna Cyan/Neon Green
+    stroke.Thickness = 1.5
+    stroke.Transparency = 0.2
+
+    -- Top Bar (Header)
+    local topBar = Instance.new("Frame", frame)
+    topBar.Size = UDim2.new(1, 0, 0, 30)
+    topBar.BackgroundColor3 = Color3.fromRGB(30, 30, 40)
+    topBar.BorderSizePixel = 0
+    Instance.new("UICorner", topBar).CornerRadius = UDim.new(0, 10)
+
+    -- Penutup ujung bawah topbar biar rata
+    local topFix = Instance.new("Frame", topBar)
+    topFix.Size = UDim2.new(1, 0, 0, 10)
+    topFix.Position = UDim2.new(0, 0, 1, -10)
+    topFix.BackgroundColor3 = Color3.fromRGB(30, 30, 40)
+    topFix.BorderSizePixel = 0
+
+    -- Judul di Top Bar
+    local title = Instance.new("TextLabel", topBar)
+    title.Size = UDim2.new(1, -20, 1, 0)
+    title.Position = UDim2.new(0, 10, 0, 0)
+    title.BackgroundTransparency = 1
+    title.Text = "BloxFactory " .. CFG.VERSION .. " | " .. LP.Name
+    title.TextColor3 = Color3.fromRGB(0, 255, 170)
+    title.TextSize = 14
+    title.Font = Enum.Font.GothamBold
+    title.TextXAlignment = Enum.TextXAlignment.Left
+
+    -- Text Utama (Status)
     local lbl = Instance.new("TextLabel", frame)
-    lbl.Size, lbl.Position, lbl.BackgroundTransparency = UDim2.new(1, -12, 1, -10), UDim2.new(0, 6, 0, 5), 1
-    lbl.TextColor3, lbl.TextSize, lbl.Font = Color3.new(1, 1, 1), 11, Enum.Font.Gotham
-    lbl.TextXAlignment, lbl.TextYAlignment, lbl.TextWrapped = Enum.TextXAlignment.Left, Enum.TextYAlignment.Top, true
+    lbl.Size = UDim2.new(1, -20, 1, -60)
+    lbl.Position = UDim2.new(0, 10, 0, 35)
+    lbl.BackgroundTransparency = 1
+    lbl.TextColor3 = Color3.fromRGB(220, 220, 220)
+    lbl.TextSize = 13
+    lbl.Font = Enum.Font.GothamMedium
+    lbl.TextXAlignment = Enum.TextXAlignment.Left
+    lbl.TextYAlignment = Enum.TextYAlignment.Top
+    lbl.TextWrapped = true
+
+    -- Tombol START (Lebih gede & ada animasi hover)
     local btn = Instance.new("TextButton", frame)
-    btn.Size, btn.Position = UDim2.new(1, -16, 0, 26), UDim2.new(0, 8, 1, -32)
-    btn.BackgroundColor3, btn.Text = Color3.fromRGB(60, 160, 90), "START"
-    btn.TextColor3, btn.Font, btn.TextSize, btn.Visible = Color3.new(1, 1, 1), Enum.Font.GothamBold, 13, false
+    btn.Size = UDim2.new(1, -20, 0, 35)
+    btn.Position = UDim2.new(0, 10, 1, -45)
+    btn.BackgroundColor3 = Color3.fromRGB(0, 180, 100)
+    btn.Text = "▶ START SESSION"
+    btn.TextColor3 = Color3.fromRGB(255, 255, 255)
+    btn.Font = Enum.Font.GothamBold
+    btn.TextSize = 15
+    btn.Visible = false
+    Instance.new("UICorner", btn).CornerRadius = UDim.new(0, 6)
+
+    -- Efek tombol pas disentuh
+    btn.MouseEnter:Connect(function() btn.BackgroundColor3 = Color3.fromRGB(0, 220, 120) end)
+    btn.MouseLeave:Connect(function() btn.BackgroundColor3 = Color3.fromRGB(0, 180, 100) end)
     btn.MouseButton1Click:Connect(function() Sess.start() end)
+
     pcall(function() local old = PG:FindFirstChild("BloxFactoryUI") if old then old:Destroy() end gui.Parent = PG end)
     UI.gui, UI.lbl, UI.btn = gui, lbl, btn
 end
@@ -3447,9 +3506,12 @@ function UI.render()
     local now = os.time()
     local sessLeft = Sess.active and mins(Sess.endAt - now) or 0
     local roll = mins(math.max(Store.data.lastRoll + CFG.ROLL_INTERVAL, Gacha.retryAt) - now)
-    local txt = string.format("%s | %s | %s | Lv %s\nSession: %dm left | Next roll: %dm\nFarm: %s | Stats: %s | WH: %d\nHealth: %s\n%s",
+
+    -- Nambahin enter (\\n) biar teksnya renggang
+    local txt = string.format("%s | %s | %s | Lv %s\n\nSession: %dm left | Next roll: %dm\nFarm: %s | Stats: %s\nWH Queue: %d | Health: %s\n\nStatus: %s",
         CFG.VERSION, Group.id or "Group?", (Vx.hub or "?") .. "/" .. (Vx.mode or "?"), tostring(Vx.level or "?"), sessLeft, roll,
         Farm.stopped and "stopped" or "running", Stats.statusText(), WH.pending(), Watch.health(), UI.last)
+
     if txt ~= UI.text then UI.text = txt UI.lbl.Text = txt end
     return 2
 end
