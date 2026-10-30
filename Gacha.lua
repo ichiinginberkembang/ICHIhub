@@ -1,5 +1,11 @@
 --[[
-  BloxFactory v22.0 (Android + Delta Executor)
+  BloxFactory v23.0 (Android + Delta Executor)
+  v23 changes (over v22.0):
+    * Stats: the primary driver is now ReplicatedStorage.Remotes.CommF_:InvokeServer("AddPoint", <stat>, <n>).
+      It takes the stat's internal English name, so the language of the game UI is irrelevant. The StatsFrame remote
+      and the UI "+" buttons stay as fallbacks. UI fallback no longer reads text: it maps "+" buttons by position.
+      The probe only needs 1 unspent point, and the dashboard now says WHY it has no remote (usually: no points).
+    * Codes (13b): native auto-redeem through Remotes.Redeem, once per code per account, reset/refund codes never sent.
   v22 changes (over v21.2):
     * Vx config guard: deep (nested) forced values + "observation" kill-switch + hub-copy discovery, re-asserted every 3s
     * GodHuman / MainItem.GodHuman forced off below CFG.GODHUMAN_OFF_BELOW
@@ -16,7 +22,7 @@
 -- 0. CONFIG
 ----------------------------------------------------------------
 local CFG = {
-    VERSION = "v22.0",
+    VERSION = "v23.0",
     WEBHOOKS = { 
         fruit = "https://discord.com/api/webhooks/1561728793226383510/PeYJqeHWViBXqs4M0VowG9xM-zk3Uupk2ta8UtWNUqh_R2IQaPIsxMIgZEXNnbRdJ2CM", 
         report = "https://discord.com/api/webhooks/1564228949033222204/E2n26s5XvL45E4c6Ylnozwb3cyi03QOyinAcltbcrKyAjzj8bLCGMVeDo4IR3mSeOCwd" 
@@ -53,8 +59,23 @@ local CFG = {
         REMOTE_PATH = "Backpack.BackpackFrame.StatsFrame.AddingPoints.LocalScript.RemoteEvent",
         PROBE_CODES = { "Str", "Vit", "Int", "SP", "Agi" },
         PROBE_SHAPES = { { "AddPoints", 0.5, "{stat}" }, { "AddPoints", 1, "{stat}" }, { "AddPoints", "{stat}", 1 } },
+        -- WHY first: the long-standing Blox Fruits remote. {stat} = "Melee"/"Defense"/"Sword"/"Gun"/"Demon Fruit", {n} = points.
+        COMMF_SHAPES = { { "AddPoint", "{stat}", "{n}" }, { "AddPoint", "{stat}" } },
         WATCH_REMOTE = false, LEARN_SECONDS = 120,
-        PROBE_MIN_POINTS = 2, UI_FALLBACK = true,
+        PROBE_MIN_POINTS = 1, UI_FALLBACK = true,
+    },
+    CODES = {
+        ENABLED = true,
+        -- Seed list: codes can be dead by the time you run this, the server just answers "invalid" and the code is not retried.
+        LIST = { "EASTEREXP", "LIGHTNINGABUSE", "Sub2Fer999", "Enyu_is_Pro", "Magicbus", "Starcodeheo", "Bluxxy", "fudd10",
+                 "JCWK", "kittgaming", "Axiore", "TantaiGaming", "Sub2Daigrock", "StrawHatMaine", "Sub2CaptainMaui",
+                 "Sub2OfficialNoobie", "Bignews", "SUB2GAMERROBOT_EXP1" },
+        -- Optional: a raw text URL you control (one code per line, # = comment). Lets you add new codes without editing the script.
+        FEED_URL = "",
+        -- WHY a block list: stat reset / refund codes would erase the points the Stats module just spent.
+        SKIP = { "SUB2GAMERROBOT_RESET1", "Sub2UncleKizaru", "Sub2NoobMaster123", "KITT_RESET" },
+        SKIP_PATTERNS = { "reset", "refund" },
+        START_DELAY = 10, GAP = 3, REPLY_TIMEOUT = 12, MAX_TRIES = 3,
     },
     SEA_GUARD = true, RENDER_OFF = true, FPS_CAP = 10, LOG_MAX_BYTES = 65536, STALL_AFTER = 120,
 }
@@ -101,6 +122,7 @@ if env.BloxSM and env.BloxSM.Unload then pcall(env.BloxSM.Unload) end
 local S = { alive = true, conns = {}, beats = {} }
 local Log, FS, Task, WH, Group, Store, Rot, Sess, Dead = {}, {}, {}, {}, {}, {}, {}, {}, {}
 local Vx, Noti, Input, Team, Farm, Gacha, Sea, UI, Watch, Stats = {}, {}, {}, {}, {}, {}, {}, {}, {}, {}
+local Codes = {}
 
 local function clamp(x, lo, hi) if x < lo then return lo elseif x > hi then return hi end return x end
 local function hasHRP() local c = LP.Character return (c and c:FindFirstChild("HumanoidRootPart")) and true or false end
@@ -494,7 +516,7 @@ end
 -- 5. STATE STORE
 ----------------------------------------------------------------
 Store.path = "BloxState_" .. UID .. ".json"
-Store.data = { lastRoll = 0, bootCount = 0, rolls = 0, highTier = 0 }
+Store.data = { lastRoll = 0, bootCount = 0, rolls = 0, highTier = 0, codes = {} }   -- codes: per-account redeem results
 Store.dirty = false
 function Store.set(k, v) Store.data[k] = v Store.dirty = true end
 function Store.load()
@@ -1745,6 +1767,146 @@ function Gacha.tick()
 end
 
 ----------------------------------------------------------------
+-- 13b. CODES (v23): native auto-redeem
+--   WHY native: Vxeze has no such feature, an unknown key in the injected config is simply ignored.
+--   * Remote: ReplicatedStorage.Remotes.Redeem (RemoteFunction), the argument is the code. The reply format is not
+--     documented, so every raw reply is logged; a code counts as processed once the server answered at all.
+--   * Results live in Store.data.codes (per account): an XP code that is sent twice is wasted, a dead one is just noise.
+--   * Reset/refund codes are never sent: they would wipe the points the Stats module allocated.
+----------------------------------------------------------------
+Codes.queue, Codes.i, Codes.started, Codes.t0, Codes.noRemote = nil, 1, false, 0, 0
+Codes.done = false
+Codes.counts = { ok = 0, used = 0, dead = 0, unknown = 0, failed = 0, skipped = 0 }
+
+function Codes.blocked(code)
+    local l = string.lower(code)
+    for _, s in ipairs(CFG.CODES.SKIP) do if string.lower(s) == l then return true end end
+    for _, p in ipairs(CFG.CODES.SKIP_PATTERNS) do if l:find(p, 1, true) then return true end end
+    return false
+end
+
+function Codes.build()
+    local seen, list = {}, {}
+    local function add(c)
+        c = tostring(c or ""):match("^%s*(.-)%s*$")
+        -- WHY the charset check: the feed is plain text from a URL, only plausible code strings may reach the remote
+        if c ~= "" and #c <= 40 and c:match("^[%w_%-]+$") and not seen[string.lower(c)] then
+            seen[string.lower(c)] = true
+            list[#list + 1] = c
+        end
+    end
+    for _, c in ipairs(CFG.CODES.LIST) do add(c) end
+    local url = CFG.CODES.FEED_URL
+    if type(url) == "string" and url:match("^https?://") then
+        local ok, body = pcall(function() return game:HttpGet(url) end)
+        if ok and type(body) == "string" then
+            for line in body:gmatch("[^\r\n]+") do
+                if not line:match("^%s*[#%-]") then add((line:gsub("[,;].*$", ""))) end
+            end
+        else
+            Log.add("W", "codes: feed url could not be fetched")
+        end
+    end
+    return list
+end
+
+-- InvokeServer yields until the server answers; a code must never be able to stall the whole service.
+local function invokeWithTimeout(remote, timeout, ...)
+    local args, n = { ... }, select("#", ...)
+    local finished, ok, res = false, false, nil
+    task.spawn(function()
+        ok, res = pcall(function() return remote:InvokeServer(table.unpack(args, 1, n)) end)
+        finished = true
+    end)
+    local t0 = os.clock()
+    while not finished and os.clock() - t0 < timeout do task.wait(0.2) end
+    if not finished then return false, "timeout" end
+    return ok, res
+end
+
+local function replyText(r)
+    if type(r) == "string" then return r end
+    if type(r) == "table" then
+        local ok, j = pcall(function() return HttpService:JSONEncode(r) end)
+        return ok and j or tostring(r)
+    end
+    return tostring(r)
+end
+
+function Codes.classify(text)
+    local l = string.lower(text)
+    if l == "" or l == "nil" then return "unknown" end
+    if l:find("already", 1, true) or l:find("used", 1, true) then return "used" end
+    if l:find("invalid", 1, true) or l:find("expire", 1, true) or l:find("not valid", 1, true) or l:find("wrong", 1, true) then return "dead" end
+    return "ok"
+end
+
+function Codes.finish()
+    Codes.done = true
+    local n = Codes.counts
+    local line = string.format("codes: ok=%d used=%d dead=%d unknown=%d failed=%d skipped=%d", n.ok, n.used, n.dead, n.unknown, n.failed, n.skipped)
+    Log.add("I", line)
+    UI.status(line)
+end
+
+-- One code per call, so the service heartbeat keeps ticking and a slow server never blocks anything else.
+function Codes.tick()
+    local c = CFG.CODES
+    if not c.ENABLED or Codes.done then return false end
+    if not (Sess.active and not Sess.signaledAt) then return 5 end
+    if not (Team.done() and hasHRP()) then return 5 end
+    local folder = RS:FindFirstChild("Remotes")
+    local remote = folder and folder:FindFirstChild("Redeem")
+    if not remote then
+        Codes.noRemote = Codes.noRemote + 1
+        if Codes.noRemote >= 12 then Log.add("W", "codes: Remotes.Redeem not found, giving up") Codes.done = true return false end
+        return 5
+    end
+    if not Codes.started then Codes.started, Codes.t0 = true, os.clock() end
+    -- WHY a short delay: the XP boost timer starts at redeem, so wait until the character is actually farming
+    if os.clock() - Codes.t0 < c.START_DELAY then return 2 end
+    Codes.queue = Codes.queue or Codes.build()
+
+    local rec = Store.data.codes
+    while Codes.i <= #Codes.queue do
+        local code = Codes.queue[Codes.i]
+        Codes.i = Codes.i + 1
+        local e = rec[code]
+        if Codes.blocked(code) then
+            Codes.counts.skipped = Codes.counts.skipped + 1
+        elseif type(e) == "table" and (e.done or (e.tries or 0) >= c.MAX_TRIES) then
+            Codes.counts.skipped = Codes.counts.skipped + 1    -- handled on an earlier run
+        else
+            local ok, res = invokeWithTimeout(remote, c.REPLY_TIMEOUT, code)
+            e = type(e) == "table" and e or {}
+            if ok then
+                local text = replyText(res)
+                local kind = Codes.classify(text)
+                rec[code] = { done = true, kind = kind, reply = string.sub(text, 1, 80), at = os.time() }
+                Codes.counts[kind] = Codes.counts[kind] + 1
+                Log.add("I", string.format("codes: %s -> %s (%s)", code, kind, string.sub(text, 1, 80)))
+            else
+                e.tries, e.last = (e.tries or 0) + 1, string.sub(tostring(res), 1, 80)
+                rec[code] = e
+                Codes.counts.failed = Codes.counts.failed + 1
+                Log.add("W", string.format("codes: %s failed (%s), try %d/%d", code, tostring(res), e.tries, c.MAX_TRIES))
+            end
+            Store.set("codes", rec)
+            return c.GAP
+        end
+    end
+    Codes.finish()
+    return false
+end
+
+-- Manual re-run (env.BloxSM.CodesRun), e.g. after editing CFG.CODES.LIST or pointing FEED_URL at a new list.
+function Codes.rerun()
+    Codes.queue, Codes.i, Codes.started, Codes.done, Codes.noRemote = nil, 1, false, false, 0
+    Codes.counts = { ok = 0, used = 0, dead = 0, unknown = 0, failed = 0, skipped = 0 }
+    Task.service("codes-manual", 3, Codes.tick)
+end
+
+----------------------------------------------------------------
 -- 14. SEA GUARD
 ----------------------------------------------------------------
 Sea.PLACES = { [2753915549] = 1, [4442272183] = 2, [7449423635] = 3 }
@@ -2105,6 +2267,7 @@ end
 function Stats.resolve()
     local tpl = FS.readJSON(CFG.STATS.REMOTE_FILE)
     if tpl and tpl.kind == "ui" then          -- v22: the "+" buttons are the driver, mapped by label every time PlayerGui is rebuilt
+        Stats.uiReverse = tpl.reverse == true
         local map = Stats.uiMapButtons()
         if map and next(map) then
             local any
@@ -2136,9 +2299,24 @@ function Stats.findRemote()
         if d:IsA("RemoteEvent") or d:IsA("RemoteFunction") then return d end
     end
 end
-local function fillShape(shape, code)
+function Stats.remoteCandidates()
     local out = {}
-    for i, v in ipairs(shape) do out[i] = (v == "{stat}") and code or v end
+    -- WHY CommF_ first: it is the remote every Blox Fruits stat script has used for years and it takes the stat's internal
+    -- English name, so the language of the game UI does not matter.
+    local folder = RS:FindFirstChild("Remotes")
+    local cf = folder and folder:FindFirstChild("CommF_")
+    if cf then out[#out + 1] = { remote = cf, tag = "CommF_", style = "name", shapes = CFG.STATS.COMMF_SHAPES } end
+    local r = Stats.findRemote()
+    if r then out[#out + 1] = { remote = r, tag = "StatsFrame", style = "code", shapes = CFG.STATS.PROBE_SHAPES } end
+    return out
+end
+local function fillShape(shape, code, amount)
+    local out = {}
+    for i, v in ipairs(shape) do
+        if v == "{stat}" then out[i] = code
+        elseif v == "{n}" then out[i] = amount or 1
+        else out[i] = v end
+    end
     return out
 end
 -- ---- v22 probe: every attempt is logged to StatsProbe_<UID>.txt so a failure explains itself ----
@@ -2220,11 +2398,59 @@ function Stats.dumpUi()
     FS.write("StatsUiDump_" .. UID .. ".txt", table.concat(out, "\n"))
     Log.add("I", "stats UI layout written to StatsUiDump_" .. UID .. ".txt")
 end
+-- Language-independent mapping: "+" is not localised, and the five stat rows are stacked in the game's fixed order
+-- (Melee, Defense, Sword, Gun, Demon Fruit). probeUi verifies the first click and flips the order if the layout is reversed.
+Stats.uiReverse = false
+function Stats.mapByOrder()
+    local root = Stats.uiRoot() or PG
+    local rows, n = {}, 0
+    for _, d in ipairs(root:GetDescendants()) do
+        n = n + 1
+        if n > 8000 then break end
+        if d:IsA("GuiButton") then
+            local t = d:IsA("TextButton") and (d.Text or ""):match("^%s*(.-)%s*$") or ""
+            local nm = string.lower(d.Name)
+            if t == "+" or nm == "plus" or nm == "add" or nm == "addpoint" or nm == "addpoints" then
+                local under, p = (root ~= PG), d.Parent
+                for _ = 1, 8 do
+                    if under or not p or p == PG then break end
+                    if string.lower(p.Name):find("stat", 1, true) then under = true end
+                    p = p.Parent
+                end
+                if under then rows[#rows + 1] = { b = d, idx = n } end
+            end
+        end
+    end
+    -- WHY idx as last tie-break: AbsolutePosition can be zero while the menu is closed, then DOM order is all we have
+    table.sort(rows, function(a, b)
+        local ay, by = a.b.AbsolutePosition.Y, b.b.AbsolutePosition.Y
+        if math.abs(ay - by) > 4 then return ay < by end
+        local ax, bx = a.b.AbsolutePosition.X, b.b.AbsolutePosition.X
+        if math.abs(ax - bx) > 4 then return ax < bx end
+        return a.idx < b.idx
+    end)
+    if #rows ~= #Stats.NAMES then
+        Stats.logProbe("ui order map: found " .. #rows .. " plus buttons, expected " .. #Stats.NAMES)
+        return nil
+    end
+    local map, ordered = {}, {}
+    for i, r in ipairs(rows) do
+        ordered[i] = r.b
+        map[Stats.NAMES[Stats.uiReverse and (#rows + 1 - i) or i]] = r.b
+    end
+    Stats.uiOrder = ordered
+    return map
+end
 -- Map stat -> "+" button by reading the labels around each GuiButton. A stat is only accepted when exactly ONE stat
 -- identifier (melee/str, defense/vit, sword/sp, gun/agi, fruit/int) appears at the closest container level.
 function Stats.uiMapButtons()
+    Stats.uiOrder = nil
     local root = Stats.uiRoot()
-    if not root then return nil, "StatsFrame not found" end
+    if not root then
+        local m = Stats.mapByOrder()
+        if m and next(m) then return m end
+        return nil, "StatsFrame not found"
+    end
     local ids = {}
     for stat, code in pairs(Stats.CODE_OF) do ids[string.lower(stat)] = stat ids[string.lower(code)] = stat end
     ids["fruit"], ids["demon"] = "Demon Fruit", "Demon Fruit"
@@ -2272,24 +2498,36 @@ function Stats.uiMapButtons()
     end
     local map = {}
     for stat, e in pairs(best) do map[stat] = e.btn end
+    if not next(map) then map = Stats.mapByOrder() or {} end    -- labels did not match (localised UI): fall back to position
     return map
 end
 
-function Stats.probeRemote(remote, cand)
+function Stats.probeRemote(remote, cand, opts)
+    opts = opts or {}
     local c = CFG.STATS
     local isFn = remote:IsA("RemoteFunction")
-    Stats.logProbe("remote " .. remote:GetFullName() .. " [" .. remote.ClassName .. "]")
-    for si, shape in ipairs(c.PROBE_SHAPES) do
-        local slot
-        for i, v in ipairs(shape) do if v == "{stat}" then slot = i end end
+    local shapes = opts.shapes or c.PROBE_SHAPES
+    local style = opts.style or "code"        -- "code": Str/Vit/... | "name": Melee/Defense/... (display names, UI language independent)
+    Stats.logProbe("remote " .. remote:GetFullName() .. " [" .. remote.ClassName .. "] style=" .. style)
+    for si, shape in ipairs(shapes) do
+        local slot, nslot
+        for i, v in ipairs(shape) do if v == "{stat}" then slot = i elseif v == "{n}" then nslot = i end end
         if slot then
             local stat = cand[1]                   -- first stat that is NOT at its cap (a capped stat can never prove a shape)
-            local code = Stats.CODE_OF[stat]
-            local args = fillShape(shape, code)
+            local code = (style == "name") and stat or Stats.CODE_OF[stat]
+            local args = fillShape(shape, code, 1)
             local parts = {}
             for i = 1, #shape do parts[i] = tostring(args[i]) end
             local gained, dPts, diff, err = Stats.attempt(function()
-                if isFn then remote:InvokeServer(table.unpack(args, 1, #shape)) else remote:FireServer(table.unpack(args, 1, #shape)) end
+                if isFn then
+                    -- WHY spawn: InvokeServer yields until the server answers; the verification must not wait on it forever
+                    task.spawn(function()
+                        local ok, e = pcall(remote.InvokeServer, remote, table.unpack(args, 1, #shape))
+                        if not ok then Stats.logProbe("invoke error: " .. tostring(e)) end
+                    end)
+                else
+                    remote:FireServer(table.unpack(args, 1, #shape))
+                end
             end)
             Stats.logProbe(string.format("shape#%d (%s) stat=%s -> gained=%s pointsDelta=%s err=%s changed={%s}",
                 si, table.concat(parts, ", "), stat, tostring(gained), tostring(dPts), tostring(err), table.concat(diff, "; ", 1, math.min(#diff, 8))))
@@ -2299,17 +2537,18 @@ function Stats.probeRemote(remote, cand)
                     return false, "call shape #" .. si .. " works (points dropped by " .. tostring(dPts) .. ") but no bound stat value moved, see StatsProbe / StatsLayout files"
                 end
                 local map = {}
-                for st, cd in pairs(Stats.CODE_OF) do map[st] = cd end   -- other stats are INFERRED; allocate() drops any that prove wrong
+                for st, cd in pairs(Stats.CODE_OF) do map[st] = (style == "name") and st or cd end   -- other stats are INFERRED; allocate() drops any that prove wrong
                 map[gained] = code
                 local full = remote:GetFullName()
                 local rel = full:match("^Players%.[^%.]+%.PlayerGui%.(.+)$")
                 local tpl = { path = rel or full, gui = rel ~= nil, kind = isFn and "InvokeServer" or "FireServer", n = #shape,
-                    args = fillShape(shape, code), statSlot = slot, statArg = map, probed = true }
+                    args = fillShape(shape, code, 1), statSlot = slot, amountSlot = nslot, statArg = map, probed = true }
                 if not FS.writeJSON(c.REMOTE_FILE, tpl) then Log.add("W", "stats: could not write " .. c.REMOTE_FILE .. ", template kept in memory only") end
                 Stats.tpl, Stats.remote, Stats.bad, Stats.zero = tpl, remote, {}, {}
+                Stats.amountOk = true
                 local p, lv = Stats.read()
                 if p then Stats.remember(p, lv) end
-                Log.add("I", "stats probe ok: shape #" .. si .. " (" .. table.concat(parts, ", ") .. ")")
+                Log.add("I", "stats probe ok: " .. (opts.tag or remote.Name) .. " shape #" .. si .. " (" .. table.concat(parts, ", ") .. ")")
                 return true
             end
         end
@@ -2333,8 +2572,20 @@ function Stats.probeUi(cand)
                 if not Input.click(b) then error("no connection fired on the button") end
             end)
             Stats.logProbe(string.format("ui click %s -> gained=%s pointsDelta=%s err=%s changed={%s}", stat, tostring(gained), tostring(dPts), tostring(err), table.concat(diff, "; ", 1, math.min(#diff, 8))))
+            if gained and gained ~= stat and Stats.uiOrder and not Stats.uiReverse then
+                -- WHY: the order map assumed Melee on top. If the click raised another stat the layout is reversed.
+                Stats.uiReverse = true
+                local m2 = Stats.mapByOrder()
+                if m2 and m2[gained] == b then
+                    map = m2
+                    Stats.logProbe("ui order map was reversed, corrected")
+                else
+                    Stats.uiReverse, gained = false, nil
+                    Stats.logProbe("ui order map does not match what the click did, giving up on it")
+                end
+            end
             if gained then
-                local tpl = { kind = "ui", n = 0, path = "", args = {}, probed = true, statArg = {} }
+                local tpl = { kind = "ui", n = 0, path = "", args = {}, probed = true, statArg = {}, reverse = Stats.uiReverse }
                 for st in pairs(map) do tpl.statArg[st] = true end
                 if not FS.writeJSON(CFG.STATS.REMOTE_FILE, tpl) then Log.add("W", "stats: could not write " .. CFG.STATS.REMOTE_FILE) end
                 Stats.uiMap, Stats.tpl, Stats.remote, Stats.bad, Stats.zero = map, tpl, b, {}, {}
@@ -2367,15 +2618,15 @@ function Stats.probe()
     end
     if #cand == 0 then return false, "every stat is at its cap, nothing to allocate" end
     Stats.logProbe(string.format("probe start: points=%s candidates=%s", tostring(points), table.concat(cand, ",")))
-    local remote = Stats.findRemote()
-    if remote then
-        local ok, err = Stats.probeRemote(remote, cand)
+    local tried = 0
+    for _, cd in ipairs(Stats.remoteCandidates()) do
+        tried = tried + 1
+        local ok, err = Stats.probeRemote(cd.remote, cand, cd)
         if ok then return true end
-        Stats.logProbe("remote probe: " .. tostring(err))
+        Stats.logProbe(cd.tag .. " probe: " .. tostring(err))
         if err and err:find("works", 1, true) then return false, err end    -- the call works; the problem is the value binding, do not spend more points
-    else
-        Stats.logProbe("no remote found under PlayerGui")
     end
+    if tried == 0 then Stats.logProbe("no stats remote found (Remotes.CommF_ / PlayerGui)") end
     if c.UI_FALLBACK then
         local ok, err = Stats.probeUi(cand)
         if ok then return true end
@@ -2391,6 +2642,7 @@ function Stats.autoProbe()
         return 5
     end
     Stats.probeFails = (Stats.probeFails or 0) + 1
+    Stats.lastErr = err
     local wait
     if err and err:find("need at least", 1, true) then wait = 120
     elseif err and err:find("at its cap", 1, true) then wait = 600
@@ -2399,6 +2651,21 @@ function Stats.autoProbe()
     Stats.state = "probe failed"
     UI.status("STATS: probe failed (" .. tostring(err) .. "), retry in " .. wait .. "s")
     return 30
+end
+-- One-shot diagnosis (env.BloxSM.StatsWhy): prints everything that decides whether stats can work on this account.
+function Stats.why()
+    local lines = {}
+    local function add(s) lines[#lines + 1] = s end
+    add("values bound: " .. tostring(Stats.vals ~= nil or Stats.bind()))
+    local p, lv = Stats.read()
+    add("unspent points: " .. tostring(p) .. "  (probe needs >= " .. tostring(CFG.STATS.PROBE_MIN_POINTS) .. "; 0 means nothing to allocate, not a bug)")
+    if lv then for _, nm in ipairs(Stats.NAMES) do add("  " .. nm .. " = " .. tostring(lv[nm])) end end
+    local folder = RS:FindFirstChild("Remotes")
+    add("Remotes.CommF_: " .. tostring(folder ~= nil and folder:FindFirstChild("CommF_") ~= nil))
+    add("StatsFrame remote: " .. tostring(Stats.findRemote() ~= nil))
+    add("plus buttons (position map): " .. tostring(Stats.mapByOrder() ~= nil))
+    add("driver bound: " .. tostring(Stats.remote ~= nil) .. "  state: " .. tostring(Stats.state) .. "  lastErr: " .. tostring(Stats.lastErr))
+    for _, l in ipairs(lines) do print("[BloxSM] " .. l) Log.add("I", "stats why: " .. l) end
 end
 function Stats.probeNow()
     Task.spawn("stats-probe", function()
@@ -2457,8 +2724,10 @@ function Stats.sendStat(stat, n, budget)
         return sent
     end
     if tpl.amountSlot and Stats.amountOk then
-        Stats.fire(Stats.buildArgs(stat, n))
-        return n
+        -- WHY clamp: one huge amount is the first thing a server-side sanity check rejects
+        local amt = math.max(1, math.min(n, budget))
+        Stats.fire(Stats.buildArgs(stat, amt))
+        return amt
     end
     local sent = 0
     for _ = 1, math.min(n, budget) do
@@ -2492,7 +2761,7 @@ function Stats.statusText()
     if Stats.learnState then return "learning" end
     if not CFG.STATS.ENABLED then return "off" end
     if os.time() < Stats.pausedUntil then return "paused: " .. tostring(Stats.pauseWhy) end
-    if not Stats.remote then return "no remote (probe pending)" end
+    if not Stats.remote then return "no remote: " .. tostring(Stats.lastErr or "probe pending") end
     return Stats.state
 end
 function Stats.tick()
@@ -2565,7 +2834,10 @@ function Stats.tick()
         Stats.fails = Stats.fails + 1
         Stats.state = "no effect x" .. Stats.fails
         if Stats.fails >= 5 then
-            Stats.pause("remote has no effect, run StatsLearn again", 1800)
+            -- WHY: a template that stopped working (game update, stale file) must not be trusted for 30 minutes: forget it and re-probe
+            FS.delete(CFG.STATS.REMOTE_FILE)
+            Stats.remote, Stats.tpl, Stats.probeAt = nil, nil, 0
+            Stats.pause("remote has no effect, re-probing", 120)
             WH.send("report", "Stats allocation has no effect", "Account " .. LP.Name .. ": 5 attempts changed nothing", 15158332, 2)
             Stats.fails = 0
         end
@@ -2677,6 +2949,9 @@ env.BloxSM = {
     GuardNow = function() return Vx.enforceAll() end,
     StatsHookTest = function() Task.spawn("stats-hooktest", Stats.hookTest) end,
     StatsDump = function() Stats.dumped = false Stats.dumpLayout() end,
+    StatsWhy = function() Task.spawn("stats-why", Stats.why) end,
+    CodesRun = function() Codes.rerun() end,
+    CodesForget = function() Store.set("codes", {}) Log.add("I", "redeemed-codes memory cleared") end,
     StatsPlan = function()
         local p, lv = Stats.read()
         if not p and Stats.bind() then p, lv = Stats.read() end
@@ -2727,6 +3002,7 @@ Task.service("gacha", 3, Gacha.tick)
 Task.service("sea-guard", 10, Sea.tick)
 Task.service("dmg", 1, Dmg.tick)
 Task.service("stats", 5, Stats.tick)
+Task.service("codes", 5, Codes.tick)
 Task.service("ui", 2, UI.render)
 Task.service("status-file", 15, Watch.statusFile)
 Task.service("watchdog", 15, Watch.tick)
