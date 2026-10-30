@@ -38,7 +38,7 @@
 -- 0. CONFIG
 ----------------------------------------------------------------
 local CFG = {
-    VERSION = "v24.0",
+    VERSION = "v24.1",
     WEBHOOKS = { 
         fruit = "https://discord.com/api/webhooks/1561728793226383510/PeYJqeHWViBXqs4M0VowG9xM-zk3Uupk2ta8UtWNUqh_R2IQaPIsxMIgZEXNnbRdJ2CM", 
         report = "https://discord.com/api/webhooks/1564228949033222204/E2n26s5XvL45E4c6Ylnozwb3cyi03QOyinAcltbcrKyAjzj8bLCGMVeDo4IR3mSeOCwd" 
@@ -87,7 +87,19 @@ local CFG = {
     FORCE_GUARD_FAST = 3, FORCE_GUARD_SLOW = 15, FORCE_GUARD_FAST_FOR = 600,
     KEN_RUNTIME_OFF = false,                   -- ASSUMED remote signature (CommE:FireServer("Ken", false)); off unless you test it
     -- v22 sea guard
-    SEA = { READY_WAIT = 20, TRY_GAP = 45, MAX_TRIES = 8, HUB_ASSIST_AFTER = 2, DIAG_ZQUEST = true, RELOAD_FILE = "BloxFactory.lua" },
+    SEA = {
+        READY_WAIT = 20,            -- seconds the character must exist (team chosen) before the first remote attempt
+        TRY_GAP = 45, MAX_GAP = 300,-- gap between remote attempts: 45s, then x1.5 per attempt up to MAX_GAP. There is NO attempt cap any more.
+        ALERT_AFTER = 5,            -- one webhook alert after this many attempts without leaving the sea
+        TP_WAIT = 20,               -- after an InvokeServer, wait this long for LP.OnTeleport before calling the attempt "refused"
+        HUB_ASSIST = true,          -- hub quest chain (Auto New World / Auto Third World) is switched ON BEFORE the hub loads, in parallel with the remote
+        FARM_METHOD_WHILE_TRAVEL = nil,  -- e.g. "Level": Select Method Farm used while the account sits in the wrong sea (nil = leave it alone)
+        IDLE_BUDGET = 1200,         -- seconds the idle verifier stays quiet while the account is in the wrong sea, afterwards it may mark the session dead
+        DIAG_ZQUEST = true,
+        RELOAD_FILE = "BloxFactory.lua",  -- workspace file containing THIS script, used for queue_on_teleport
+        RELOAD_URL = "",            -- alternative: raw https URL of this script, used when RELOAD_FILE does not exist
+        MARKER = "BloxSeaTravel_",  -- + UID .. ".json": written before an attempt, read after the reload to prove the arrival
+    },
     -- v22 damage numbers
     DMG = { ENABLED = true, NAMES = { "damage", "dmg" }, PROBE_SECONDS = 25, PROBE_MAX = 40 },
     IDLE = { ENABLED = true, CHECK = 5, GRACE = 90, AFTER = 90, STAGE_WAIT = 90, MOVE_STUDS = 12, FALLBACK_METHODS = { "Bone" }, GIVEUP_DEAD = true, DRIFT_AFTER = 45 },
@@ -1241,6 +1253,7 @@ function Vx.boot()
             cfg, mode = Vx.buildConfig(lv)
             removed = Vx.sanitize(cfg)
             Vx.applyOverrides(cfg)
+            Sea.preload(cfg, lv)   -- v24.1: wrong sea => the hub quest chain is ON before the hub loads
             Vx.buildForced(lv)
             local forcedNow = Vx.enforceOne(cfg)
             Vx.snapshot(cfg)
@@ -1851,7 +1864,7 @@ function Farm.escalate(stage, idle)
 end
 function Farm.verify()
     local I = CFG.IDLE
-    local ready = I.ENABLED and Sess.active and not Sess.signaledAt and Vx.mode and Vx.loaded and Vx.loadedAt and Team.done() and hasHRP() and not Farm.stopped and not Resp.pending and (Sess.endAt - os.time()) > CFG.FARM_STOP_BEFORE + 30
+    local ready = I.ENABLED and Sess.active and not Sess.signaledAt and Vx.mode and Vx.loaded and Vx.loadedAt and Team.done() and hasHRP() and not Farm.stopped and not Resp.pending and not Sea.holdsVerifier() and (Sess.endAt - os.time()) > CFG.FARM_STOP_BEFORE + 30
     if not ready then Farm.watch = nil return I.CHECK end
     local cur = Farm.probe()
     if not cur then return I.CHECK end
@@ -2462,75 +2475,214 @@ end
 ----------------------------------------------------------------
 Sea.PLACES = { [2753915549] = 1, [4442272183] = 2, [7449423635] = 3 }
 Sea.cur = Sea.PLACES[game.PlaceId]
-function Sea.reset() Sea.tries, Sea.nextAt, Sea.busy, Sea.busyAt, Sea.readySince = 0, 0, false, 0, nil end
+function Sea.reset()
+    Sea.tries, Sea.nextAt, Sea.busy, Sea.busyAt, Sea.readySince = 0, 0, false, 0, nil
+    Sea.alerted, Sea.wrongSince, Sea.budgetLogged = false, nil, false
+end
 Sea.reset()
 
--- Keep the script alive across the teleport. ASSUMED: Delta exposes queue_on_teleport and the script is saved as
--- workspace/<CFG.SEA.RELOAD_FILE>. Without either, the scheduler / Delta autoexec must re-run the script in the new server.
-function Sea.queueReload()
-    local c = CFG.SEA
-    if env.BloxReloadQueued == game.JobId then return end
-    local q = queue_on_teleport or (syn and syn.queue_on_teleport)
-    if type(q) ~= "function" or type(c.RELOAD_FILE) ~= "string" or not FS.exists(c.RELOAD_FILE) then
-        Log.add("W", "sea: no reload queued (needs queue_on_teleport + file '" .. tostring(c.RELOAD_FILE) .. "'), relying on autoexec / scheduler")
-        return
+-- Fresh read on every call. PlaceId is the only thing the server cannot disagree with, and it changes when the account is
+-- teleported by hand or by another script while this one keeps running.
+function Sea.detect()
+    local s = Sea.PLACES[game.PlaceId]
+    if s ~= Sea.cur then
+        Log.add("W", "sea: now in Sea " .. tostring(s) .. " (was " .. tostring(Sea.cur) .. ", PlaceId " .. tostring(game.PlaceId) .. ")")
+        Sea.cur = s
+        Sea.reset()
     end
-    if pcall(q, 'loadstring(readfile("' .. c.RELOAD_FILE .. '"))()') then
-        env.BloxReloadQueued = game.JobId
-        Log.add("I", "sea: reload queued from " .. c.RELOAD_FILE)
-    end
+    return s
 end
--- Let the hub run its own sea quest chain (Ice Admiral / Don Swan style requirements cannot be done by one remote call).
+-- Same thresholds as before: Sea 2 from level 700, Sea 3 from level 1500.
+function Sea.wanted(lv) if lv >= 1500 then return 3 elseif lv >= 700 then return 2 end return 1 end
+-- true while a Vxeze-mode account sits in a sea below the one it should farm in
+function Sea.wrong()
+    if not CFG.SEA_GUARD or Vx.hub ~= "vxeze" then return false end
+    local cur = Sea.detect()
+    local lv = Vx.readLevel()
+    if not cur or not lv then return false end
+    return cur < Sea.wanted(lv)
+end
+-- The idle verifier asks this: farming is IMPOSSIBLE in the wrong sea (the Cake method needs Sea 3), so "no progress" there is
+-- expected and must not escalate (stage 2 would even switch to Bone, also Sea 3 only) or mark the session dead. The pause is
+-- bounded, a really stuck account still rotates away after IDLE_BUDGET.
+function Sea.holdsVerifier()
+    if not Sea.wrong() then Sea.wrongSince = nil return false end
+    Sea.wrongSince = Sea.wrongSince or os.time()
+    if os.time() - Sea.wrongSince < CFG.SEA.IDLE_BUDGET then return true end
+    if not Sea.budgetLogged then
+        Sea.budgetLogged = true
+        Log.add("E", "sea: still in Sea " .. tostring(Sea.cur) .. " after " .. CFG.SEA.IDLE_BUDGET .. "s, the idle verifier is active again")
+        WH.send("report", "Stuck in the wrong sea", "Account " .. LP.Name .. " is still in Sea " .. tostring(Sea.cur) .. " after " .. CFG.SEA.IDLE_BUDGET .. "s (" .. Sea.tries .. " travel attempts)", 15158332, 3)
+    end
+    return false
+end
+
+-- ---- hub quest chain ----
+function Sea.assistKey() return (Sea.cur == 1) and "Auto New World" or "Auto Third World" end
+-- Called while the config is still being built, BEFORE the hub is loaded: the hub reads its config at start, flipping the key
+-- afterwards only works if it re-reads it (the v24 behaviour: assist started after the 3rd failed remote, ~2 minutes in).
+function Sea.preload(cfg, lv)
+    if not (CFG.SEA_GUARD and CFG.SEA.HUB_ASSIST) then return end
+    local cur = Sea.detect()
+    if not cur or cur >= Sea.wanted(lv) then return end
+    local key = Sea.assistKey()
+    cfg[key] = true
+    local m = CFG.SEA.FARM_METHOD_WHILE_TRAVEL
+    if m then cfg["Select Method Farm"] = m end
+    Log.add("W", string.format("sea: level %d account in Sea %d, '%s' = true in the hub config before it loads%s", lv, cur, key, m and (", method " .. m) or ""))
+end
+-- Re-asserted every tick while in the wrong sea, also on the hub's own copy of the config (Vx.copies).
 function Sea.hubAssist()
-    local key = (Sea.cur == 1) and "Auto New World" or "Auto Third World"
+    if not CFG.SEA.HUB_ASSIST then return end
+    local key = Sea.assistKey()
     local targets = {}
     if type(env.Config) == "table" then targets[1] = env.Config end
     local okc, copies = pcall(Vx.copies)
     if okc then for _, t in ipairs(copies) do targets[#targets + 1] = t end end
-    local flipped = false
+    local flipped = 0
     for _, t in ipairs(targets) do
-        if t[key] ~= true then t[key] = true flipped = true end
+        if t[key] ~= true then t[key] = true flipped = flipped + 1 end
     end
-    if flipped then Log.add("W", "sea: hub assist ON (" .. key .. "), the hub runs the sea quest chain itself") end
+    if flipped > 0 then Log.add("W", "sea: hub assist re-enabled (" .. key .. ") in " .. flipped .. " config table(s)") end
 end
+
+-- ---- surviving the teleport ----
+-- ASSUMED: queue_on_teleport exists. Source of the script after the teleport: workspace file first, then RELOAD_URL. If neither
+-- exists the only way back is the executor's autoexec folder, which is logged once at boot (Sea.preflight) instead of discovered later.
+function Sea.reloadSource()
+    local c = CFG.SEA
+    if type(c.RELOAD_FILE) == "string" and c.RELOAD_FILE ~= "" and FS.exists(c.RELOAD_FILE) then
+        return "loadstring(readfile(" .. string.format("%q", c.RELOAD_FILE) .. "))()", "file " .. c.RELOAD_FILE
+    end
+    if type(c.RELOAD_URL) == "string" and c.RELOAD_URL:find("^https://") then
+        return "loadstring(game:HttpGet(" .. string.format("%q", c.RELOAD_URL) .. "))()", "url"
+    end
+    return nil, "none"
+end
+function Sea.queueReload()
+    if env.BloxReloadQueued == game.JobId then return true end
+    local q = queue_on_teleport or (syn and syn.queue_on_teleport)
+    local code, what = Sea.reloadSource()
+    if type(q) ~= "function" or not code then
+        Log.add("W", "sea: no reload queued (queue_on_teleport=" .. tostring(type(q) == "function") .. ", source=" .. what .. "), relying on autoexec / scheduler")
+        return false
+    end
+    if pcall(q, code) then
+        env.BloxReloadQueued = game.JobId
+        Log.add("I", "sea: reload queued (" .. what .. ")")
+        return true
+    end
+    Log.add("W", "sea: queue_on_teleport raised")
+    return false
+end
+function Sea.preflight()
+    local q = queue_on_teleport or (syn and syn.queue_on_teleport)
+    local code, what = Sea.reloadSource()
+    Log.add((type(q) == "function" and code) and "I" or "W", string.format("sea: boot in Sea %s (PlaceId %s) | queue_on_teleport=%s | reload source=%s | OnTeleport hook=%s",
+        tostring(Sea.cur), tostring(game.PlaceId), tostring(type(q) == "function"), what, tostring(Sea.hooked == true)))
+end
+
+-- A successful travel answers with NOTHING (the server just teleports you), so "InvokeServer returned nil" proves nothing.
+-- The proof is LP.OnTeleport firing, which also gives us the last moment to flush files before the client goes away.
+function Sea.hookTeleport()
+    pcall(function()
+        S.conns[#S.conns + 1] = LP.OnTeleport:Connect(function(state)
+            local st = tostring(state)
+            if st:find("Failed", 1, true) then Log.add("W", "sea: teleport failed (" .. st .. ")") Sea.tpAt = nil return end
+            if not Sea.tpAt then Log.add("I", "sea: teleport state " .. st) end
+            Sea.tpAt = os.clock()
+            pcall(function() Log.flush() Store.save(true) WH.saveOutbox() end)
+        end)
+        Sea.hooked = true
+    end)
+    pcall(function()
+        S.conns[#S.conns + 1] = TeleportService.TeleportInitFailed:Connect(function(plr, result, msg)
+            if plr == LP then Log.add("W", "sea: TeleportInitFailed " .. tostring(result) .. " " .. tostring(msg)) Sea.tpAt = nil end
+        end)
+    end)
+end
+
+-- Marker: written before an attempt, judged after the reload. Turns "did it work?" into one log line.
+function Sea.markerPath() return CFG.SEA.MARKER .. UID .. ".json" end
+function Sea.writeMarker(from, to, remote)
+    FS.writeJSON(Sea.markerPath(), { from = from, to = to, remote = remote, ts = os.time(), job = game.JobId, tries = Sea.tries })
+end
+function Sea.checkArrival()
+    local m = FS.readJSON(Sea.markerPath())
+    if not m then return end
+    local age = os.time() - (tonumber(m.ts) or 0)
+    if age > 900 then FS.delete(Sea.markerPath()) return end
+    if Sea.cur == m.to then
+        Log.add("I", string.format("sea: ARRIVED in Sea %s via %s, %ds after attempt %s", tostring(Sea.cur), tostring(m.remote), age, tostring(m.tries)))
+        FS.delete(Sea.markerPath())
+    elseif m.job ~= game.JobId then
+        Log.add("W", string.format("sea: a travel to Sea %s was started %ds ago but this new server is Sea %s", tostring(m.to), age, tostring(Sea.cur)))
+        FS.delete(Sea.markerPath())
+    end
+end
+
+-- ---- the remote attempt ----
+function Sea.attempt(remote, label, from, to)
+    local c = CFG.SEA
+    local cf = commF()
+    if not cf then Log.add("W", "sea: CommF_ not found") return end
+    if from == 2 and c.DIAG_ZQUEST then   -- ASSUMED read-only check; only logged, never acted on
+        local okq, rq = pcall(function() return cf:InvokeServer("ZQuestProgress", "Check") end)
+        Log.add("I", "sea: ZQuestProgress/Check -> " .. (okq and (type(rq) .. ":" .. tostring(rq)) or ("error " .. tostring(rq))))
+    end
+    Sea.queueReload()
+    Sea.writeMarker(from, to, remote)
+    Sea.tpAt = nil
+    local ok, res = pcall(function() return cf:InvokeServer(remote) end)
+    local t0 = os.clock()
+    while not Sea.tpAt and os.clock() - t0 < c.TP_WAIT do task.wait(0.5) end
+    local shown = ok and (type(res) .. ":" .. tostring(res)) or ("error " .. tostring(res))
+    if Sea.tpAt then
+        Log.add("I", "sea: " .. remote .. " ACCEPTED (teleport started), result " .. shown)
+    else
+        FS.delete(Sea.markerPath())
+        Log.add("W", "sea: " .. remote .. " REFUSED (no teleport within " .. c.TP_WAIT .. "s), result " .. shown .. ". Quest requirement not met, the hub quest chain keeps working")
+    end
+end
+
 function Sea.tick()
     local c = CFG.SEA
     if Vx.hub == "kaitun" then return 30 end   -- Kaitun handles sea travel itself
     if not CFG.SEA_GUARD or not Sess.active or Sess.signaledAt then return 10 end
-    if Sea.cur == nil or Sea.cur == 3 then return 30 end
-    if Sea.busy and os.clock() - Sea.busyAt < 30 then return 3 end
-    if Sea.tries >= c.MAX_TRIES or os.time() < Sea.nextAt then return 10 end
-    -- WHY: v21 fired the remote as soon as Sess.active was set, i.e. possibly during loading / team select where the
-    -- server ignores it. Wait until the character exists, the team is chosen, and a few seconds have passed.
+    local cur = Sea.detect()
+    if cur == nil then
+        if not Sea.warnedUnknown then Sea.warnedUnknown = true Log.add("W", "sea: unknown PlaceId " .. tostring(game.PlaceId) .. ", sea guard idle") end
+        return 30
+    end
+    if Sea.busy and os.clock() - Sea.busyAt < c.TP_WAIT + 40 then return 3 end
     if not (game:IsLoaded() and Team.done() and hasHRP()) then Sea.readySince = nil return 5 end
-    Sea.readySince = Sea.readySince or os.clock()
-    if os.clock() - Sea.readySince < c.READY_WAIT then return 5 end
     local lv = Vx.readLevel()
     if not lv then return 10 end
-    -- WHY: v21 checked "lv >= 1500" first, so a level-1500+ account standing in SEA 1 fired TravelZou (Sea 2 only). Order is by current sea.
-    local remote, label
-    if Sea.cur == 1 and lv >= 700 then remote, label = "TravelDressrosa", "Sea 2"
-    elseif Sea.cur == 2 and lv >= 1500 then remote, label = "TravelZou", "Sea 3" end
-    if not remote then
-        UI.status("Sea guard: level " .. lv .. " too low for the next sea (Sea " .. Sea.cur .. ")")
-        return 120
-    end
+    local want = Sea.wanted(lv)
+    if cur >= want then Sea.wrongSince = nil return 30 end
+    -- from here on: the account is in the wrong sea
+    Sea.wrongSince = Sea.wrongSince or os.time()
+    if Vx.loaded then Sea.hubAssist() end
+    Sea.readySince = Sea.readySince or os.clock()
+    -- WHY: v21 fired the remote during loading / team select where the server ignores it
+    if os.clock() - Sea.readySince < c.READY_WAIT then return 5 end
+    if os.time() < Sea.nextAt then return 5 end
+    -- WHY by current sea: v21 fired TravelZou from Sea 1 (it only works from Sea 2). Level 2800 in Sea 1 goes 1 -> 2 -> 3.
+    local remote, label, to
+    if cur == 1 then remote, label, to = "TravelDressrosa", "Sea 2", 2 else remote, label, to = "TravelZou", "Sea 3", 3 end
     Sea.tries = Sea.tries + 1
-    Sea.nextAt = os.time() + c.TRY_GAP
+    -- WHY no attempt cap: v24 stopped for good after MAX_TRIES (8) and the account sat there until the idle verifier killed the session
+    Sea.nextAt = os.time() + math.min(c.MAX_GAP, c.TRY_GAP * (1.5 ^ (Sea.tries - 1)))
     Sea.busy, Sea.busyAt = true, os.clock()
-    UI.status("Sea guard: travelling to " .. label .. " (" .. Sea.tries .. "/" .. c.MAX_TRIES .. ")")
-    if Sea.tries > c.HUB_ASSIST_AFTER then Sea.hubAssist() end
+    UI.status("Sea guard: Sea " .. cur .. " -> " .. label .. " (attempt " .. Sea.tries .. ")")
+    if Sea.tries == c.ALERT_AFTER and not Sea.alerted then
+        Sea.alerted = true
+        WH.send("report", "Sea guard struggling", string.format("Account %s (level %d) is still in Sea %d after %d travel attempts. Hub quest chain: %s", LP.Name, lv, cur, Sea.tries, c.HUB_ASSIST and "running" or "off"), 15158332, 2)
+    end
     -- WHY async: InvokeServer yields until the server answers; run inline it froze this service (watchdog "STALL:sea-guard").
     Task.spawn("sea-travel", function()
-        local cf = commF()
-        if not cf then Log.add("W", "sea: CommF_ not found") Sea.busy = false return end
-        if Sea.cur == 2 and c.DIAG_ZQUEST then   -- ASSUMED read-only check; only logged, never acted on
-            local okq, rq = pcall(function() return cf:InvokeServer("ZQuestProgress", "Check") end)
-            Log.add("I", "sea: ZQuestProgress/Check -> " .. (okq and (type(rq) .. ":" .. tostring(rq)) or ("error " .. tostring(rq))))
-        end
-        Sea.queueReload()
-        local ok, res = pcall(function() return cf:InvokeServer(remote) end)
-        Log.add(ok and "I" or "W", "sea: " .. remote .. " -> " .. (ok and (type(res) .. ":" .. tostring(res)) or ("error " .. tostring(res))))
+        local ok, err = pcall(Sea.attempt, remote, label, cur, to)
+        if not ok then Log.add("E", "sea: attempt crashed: " .. tostring(err)) end
         Sea.busy = false
     end)
     return 5
@@ -3609,6 +3761,9 @@ end
 
 Group.acquire()
 Noti.boot()
+Sea.hookTeleport()
+Sea.checkArrival()
+Sea.preflight()
 if CFG.DMG.ENABLED then
     pcall(function() S.conns[#S.conns + 1] = game.DescendantAdded:Connect(Dmg.onAdded) end)
     Task.spawn("dmg-templates", Dmg.disableTemplates)
