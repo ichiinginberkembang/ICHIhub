@@ -1,20 +1,11 @@
 --[[
-  BloxFactory v23.0 (Android + Delta Executor)
-  v23 changes (over v22.0):
-    * Stats: the primary driver is now ReplicatedStorage.Remotes.CommF_:InvokeServer("AddPoint", <stat>, <n>).
-      It takes the stat's internal English name, so the language of the game UI is irrelevant. The StatsFrame remote
-      and the UI "+" buttons stay as fallbacks. UI fallback no longer reads text: it maps "+" buttons by position.
-      The probe only needs 1 unspent point, and the dashboard now says WHY it has no remote (usually: no points).
-    * Codes (13b): native auto-redeem through Remotes.Redeem, once per code per account, reset/refund codes never sent.
-  v22 changes (over v21.2):
-    * Vx config guard: deep (nested) forced values + "observation" kill-switch + hub-copy discovery, re-asserted every 3s
-    * GodHuman / MainItem.GodHuman forced off below CFG.GODHUMAN_OFF_BELOW
-    * Sea guard: correct sea order, readiness wait, async InvokeServer with result logging, hub assist, reload queue
-    * Stats: probe tries an UNCAPPED stat first, logs every attempt to StatsProbe_<UID>.txt, UI-click fallback
-    * Damage numbers: structural detection (BillboardGui/SurfaceGui with numeric text) on game.DescendantAdded
-    * Webhook URL validation (fragments are rejected instead of failing silently forever)
-  INTERFACES READ BY THE EXTERNAL SCHEDULER (unchanged):
-    * Signal file : "<username>_winterswap.json"   containing {"status":"done"}
+  BloxFactory v21  (Android + Delta Executor)
+  Layout: 0 Config | 1 Globals | 2 Core (Log/FS/Task) | 3 Webhook | 4 Group lock | 5 State store
+          6 Rotation + Session | 7 Dead-session detection | 8 Vxeze loader | 9 Notification filter
+          10 Input helpers | 11 Team | 12 Farm | 13 Gacha | 14 Sea guard | 14b Stats | 15 Dashboard | 16 Watchdog | 17 Boot
+
+  INTERFACES READ BY THE EXTERNAL SCHEDULER (do not change):
+    * Signal file : "<username>_winterswap.json"   containing {"status":"done"}  (written at session end)
     * Session file: "SessionEnd_<Group>_<UID>.txt" containing a Unix timestamp
 ]]
 
@@ -22,85 +13,132 @@
 -- 0. CONFIG
 ----------------------------------------------------------------
 local CFG = {
-    VERSION = "v23.0",
-    WEBHOOKS = { 
-        fruit = "https://discord.com/api/webhooks/1561728793226383510/PeYJqeHWViBXqs4M0VowG9xM-zk3Uupk2ta8UtWNUqh_R2IQaPIsxMIgZEXNnbRdJ2CM", 
-        report = "https://discord.com/api/webhooks/1564228949033222204/E2n26s5XvL45E4c6Ylnozwb3cyi03QOyinAcltbcrKyAjzj8bLCGMVeDo4IR3mSeOCwd" 
-    },
+    VERSION = "v22",
+
+    -- Webhooks: fill these in yourself. "REPLACE_ME" (or empty) = that target is disabled.
+    WEBHOOKS = { fruit = "REPLACE_ME", report = "REPLACE_ME" },
+
     VXEZE_URL       = "https://raw.githubusercontent.com/Dex-Bear/VxezeHubLoader/refs/heads/main/MainHub.lua",
-    LEVEL_VXEZE_MIN = 2200,
-    PREFERRED_TEAM  = "Pirates",
-    BELI_KEEP_LEGACY_UI = false,
-    -- v22 config guard (see Vx.enforceAll)
-    GODHUMAN_OFF_BELOW = 0,                 -- below this level MainItem.GodHuman / "Auto God Human" are forced to false
-    FORCE_OFF_PATTERNS = { "observation" },    -- any boolean key containing one of these words is forced to false, at ANY depth
-    FORCE_GUARD_FAST = 3, FORCE_GUARD_SLOW = 15, FORCE_GUARD_FAST_FOR = 600,
-    KEN_RUNTIME_OFF = false,                   -- ASSUMED remote signature (CommE:FireServer("Ken", false)); off unless you test it
-    -- v22 sea guard
-    SEA = { READY_WAIT = 20, TRY_GAP = 45, MAX_TRIES = 8, HUB_ASSIST_AFTER = 2, DIAG_ZQUEST = true, RELOAD_FILE = "BloxFactory.lua" },
-    -- v22 damage numbers
-    DMG = { ENABLED = true, NAMES = { "damage", "dmg" }, PROBE_SECONDS = 25, PROBE_MAX = 40 },
-    IDLE = { ENABLED = true, CHECK = 5, GRACE = 90, AFTER = 90, STAGE_WAIT = 90, MOVE_STUDS = 12, FALLBACK_METHODS = { "Bone" }, GIVEUP_DEAD = true, DRIFT_AFTER = 45 },
-    ROLL_INTERVAL = 7200, ROLL_MARGIN = 60, LOW_BELI = 5000000,
-    SESSION_BASE = 960, SESSION_MAX = 2400, SESSION_GRACE = 180, MIN_VALID_P = 1200, ROT_MAX_STEP = 180,
-    SLACK_DECAY = 1800, BOOTSTRAP_CYCLES = 3, SIGNAL_ALERT_AFTER = 600, SIGNAL_WRITE_TRIES = 3,
-    ROT_BAD_LIMIT = 3, START_MAX_WAIT = 120, GROUP_WAIT_MAX = 40,
-    DEAD_NO_CHAR = 240, DEAD_ON_ERROR = true, AUTO_REJOIN = true, REJOIN_AFTER = 150,
-    FARM_STOP_BEFORE = 120, FARM_ON_MAX = 3,
-    MAX_GROUPS = 20, LOCK_REFRESH = 10, LOCK_STALE = 120, PROBE_WAIT = 25, LOCK_RETRY_MAX = 300,
+    -- Hub selection. "kaitun" = BF-Kaitun (single config, hub manages farm/team/seas); "vxeze" = legacy two-preset mode.
+    HUB             = "kaitun",
+    KAITUN_URL      = "https://raw.githubusercontent.com/Dex-Bear/VxezeHubLoader/refs/heads/main/BF-Kaitun.lua",
+    KAITUN          = { MASTERY = true },   -- "Farm Mastery" on (Beli/Mastery/Godhuman only); set false for Godhuman only
+    IDLE_AFTER      = 90,                   -- farm idle verifier: seconds without real movement before escalating
+    LEVEL_VXEZE_MIN = 2200,        -- level >= this: "beli" config, below: "leveling" config
+    PREFERRED_TEAM  = "Pirates",   -- "Pirates" or "Marines"
+
+    -- Gacha
+    ROLL_INTERVAL = 7200,          -- gacha cooldown in seconds
+    ROLL_MARGIN   = 60,            -- safety cushion on top of the cooldown
+    LOW_BELI      = 5000000,       -- below this the report is flagged LOW BELI
+
+    -- Session / adaptive rotation timer
+    SESSION_BASE     = 960,        -- default seconds per account (16 min)
+    SESSION_MAX      = 2400,       -- upper bound the adaptive timer may reach
+    SESSION_GRACE    = 180,        -- rejoin within this many seconds after expiry = same session
+    MIN_VALID_P      = 1200,       -- a rotation period shorter than this is a manual restart, ignore it
+    ROT_MAX_STEP     = 180,        -- max seconds the timer may grow per adjustment
+    SLACK_DECAY      = 1800,        -- roll ready this long before our turn = rotation too loose, shrink
+    BOOTSTRAP_CYCLES = 3,          -- first N measured cycles converge faster (bigger steps, no cooldown guard)
+    SIGNAL_ALERT_AFTER = 600,      -- signal file still not consumed this long after writing: alert (never rewritten)
+    SIGNAL_WRITE_TRIES = 3,        -- write + read-back attempts for the signal file
+    ROT_BAD_LIMIT    = 3,          -- consecutive too-short cycles before the timer jumps analytically
+    START_MAX_WAIT   = 120,        -- start the session clock even if no character spawned after this long
+    GROUP_WAIT_MAX   = 40,         -- max wait for group lock before starting a NEW session
+
+    -- Dead-session handling
+    DEAD_NO_CHAR = 240,            -- no character for this long (after session start) = dead session
+    DEAD_ON_ERROR = true,          -- Roblox error prompt (kick/disconnect) = dead session
+    AUTO_REJOIN   = true,          -- try to rejoin if still alive this long after a dead-session signal
+    REJOIN_AFTER  = 150,
+
+    -- Farm control
+    FARM_STOP_BEFORE = 120,        -- stop Vxeze farm this many seconds before the session ends
+    FARM_ON_MAX      = 3,          -- auto-start attempts per window
+
+    -- Group lock
+    MAX_GROUPS = 20, LOCK_REFRESH = 10, LOCK_STALE = 120, PROBE_WAIT = 25,   -- WHY: must be >2x LOCK_REFRESH, a throttled instance can miss one refresh and look dead
+    LOCK_RETRY_MAX = 300,
+
+    -- Webhook manager
     WH_BURST = 5, WH_PER_MIN = 20, WH_QUEUE_MAX = 40, WH_MAX_TRIES = 6, WH_ORPHAN_AFTER = 180,
+
+    -- Vxeze loader
     VX_MAX_ATTEMPTS = 6, VX_UI_TIMEOUT = 150, VX_MAX_RELOADS = 3,
-    NOTI_BLOCK_ALL  = true, NOTI_PATTERNS = { "kill", "boss" }, NOTI_NAME_KEYS = { "noti", "toast", "popup" }, NOTI_DISABLE_KEYS = { "Noti Profile" },
+
+    -- Notifications
+    NOTI_BLOCK_ALL  = true,        -- true = drop every SetCore "SendNotification" (same as v19)
+    NOTI_PATTERNS   = { "kill", "boss" },
+    NOTI_NAME_KEYS  = { "noti", "toast", "popup" },
+    NOTI_DISABLE_KEYS = { "Noti Profile" },   -- Vxeze config keys forced to false (explicit list, see ApplyOverrides)
+
+    -- Stats allocation. Off by default: run env.BloxSM.StatsLearn() once, press "+" on two different stats, then enable.
     STATS = {
         ENABLED = true,
-        PRIORITY = { { stat = "Melee", cap = 2550 }, { stat = "Defense", cap = 2550 }, { stat = "Sword", cap = 2550 }, { stat = "Gun", cap = 2550 }, { stat = "Demon Fruit", cap = 2550 } },
-        RESERVE = 0, BATCH_MAX = 25, SEND_DELAY = 0.15, VERIFY_TIMEOUT = 3, PAUSE_FOREIGN = 600, ARG_NAMES = {},
-        REMOTE_FILE = "BloxStatsRemote.json", AUTO_PROBE = true,
-        REMOTE_PATH = "Backpack.BackpackFrame.StatsFrame.AddingPoints.LocalScript.RemoteEvent",
-        PROBE_CODES = { "Str", "Vit", "Int", "SP", "Agi" },
-        PROBE_SHAPES = { { "AddPoints", 0.5, "{stat}" }, { "AddPoints", 1, "{stat}" }, { "AddPoints", "{stat}", 1 } },
-        -- WHY first: the long-standing Blox Fruits remote. {stat} = "Melee"/"Defense"/"Sword"/"Gun"/"Demon Fruit", {n} = points.
-        COMMF_SHAPES = { { "AddPoint", "{stat}", "{n}" }, { "AddPoint", "{stat}" } },
-        WATCH_REMOTE = false, LEARN_SECONDS = 120,
-        PROBE_MIN_POINTS = 1, UI_FALLBACK = true,
+        PRIORITY = {               -- filled in this order: a stat gets points until its cap, then the next one
+            { stat = "Melee", cap = 2550 }, { stat = "Defense", cap = 2550 }, { stat = "Sword", cap = 2550 },
+            { stat = "Gun", cap = 2550 }, { stat = "Demon Fruit", cap = 2550 } },   -- 2550 is an assumed cap, adjust it
+        RESERVE = 0,               -- points to leave unspent
+        BATCH_MAX = 25,            -- max single-point calls per cycle (only for remotes without an amount argument)
+        SEND_DELAY = 0.15,         -- pause between single-point calls
+        VERIFY_TIMEOUT = 3,        -- seconds to wait for the replicated value to move
+        PAUSE_FOREIGN = 600,       -- pause this long after another allocator was detected
+        ARG_NAMES = {},            -- optional override of the stat argument, e.g. { ["Demon Fruit"] = "Blox Fruit" }
+        -- Known remote (no learning needed). "{stat}" is replaced by the stat code (Str/Vit/Int/SP/Agi). Set to nil to use Stats.learn.
+        MANUAL = { path = "Backpack.BackpackFrame.StatsFrame.AddingPoints.LocalScript.RemoteEvent", gui = true,
+                   kind = "FireServer", args = { "AddPoints", 0.5, "{stat}" } },
+        DETECT_HOOK = false,       -- true = also hook remotes to spot another allocator (costs CPU on every remote call)
+        REMOTE_FILE = "BloxStatsRemote.json",   -- learned remote, shared by all accounts (the remote is game-wide)
     },
-    CODES = {
-        ENABLED = true,
-        -- Seed list: codes can be dead by the time you run this, the server just answers "invalid" and the code is not retried.
-        LIST = { "EASTEREXP", "LIGHTNINGABUSE", "Sub2Fer999", "Enyu_is_Pro", "Magicbus", "Starcodeheo", "Bluxxy", "fudd10",
-                 "JCWK", "kittgaming", "Axiore", "TantaiGaming", "Sub2Daigrock", "StrawHatMaine", "Sub2CaptainMaui",
-                 "Sub2OfficialNoobie", "Bignews", "SUB2GAMERROBOT_EXP1" },
-        -- Optional: a raw text URL you control (one code per line, # = comment). Lets you add new codes without editing the script.
-        FEED_URL = "",
-        -- WHY a block list: stat reset / refund codes would erase the points the Stats module just spent.
-        SKIP = { "SUB2GAMERROBOT_RESET1", "Sub2UncleKizaru", "Sub2NoobMaster123", "KITT_RESET" },
-        SKIP_PATTERNS = { "reset", "refund" },
-        START_DELAY = 10, GAP = 3, REPLY_TIMEOUT = 12, MAX_TRIES = 3,
-    },
-    SEA_GUARD = true, RENDER_OFF = true, FPS_CAP = 10, LOG_MAX_BYTES = 65536, STALL_AFTER = 120,
+
+    -- Misc
+    SEA_GUARD = true, RENDER_OFF = true, FPS_CAP = 10,
+    LOG_MAX_BYTES = 65536, STALL_AFTER = 120,
 }
 
+-- Same list as v19. Matching is now word-based (see IsHighTier).
 local HIGH_TIER = { "dragon","leopard","kitsune","dough","venom","shadow","control","spirit","mammoth","t-rex","trex",
     "gas","yeti","tiger","magnet","celestial","oni","crimson","skins","gold","east","west","buddha","portal","rumble",
     "lightning","phoenix","blizzard","gravity","pain","love","spider","sound","soul","quake","creation" }
 
-local function GetVxezeLevelConfig()
+-- Carried over verbatim from v19 (Vxeze Hub config table).
+local function GetVxezeConfig()
     return {
-        ["Auto Fire Shoot Heart Leviathan"]=false,["Auto Farm Mastery 600 Gun In Inventory"]=false,["Auto Finish Train Draco Quest"]=false,["Auto Dodge Skill Seabeast"]=false,["Account Help"]=false,["Auto Reset When Complete Volcano"]=false,["Ignore Craft Volcanic Magnet"]=false,["Auto Trade Azure Ember"]=false,["Quest"]={["Race V2-V3"]=true,["Haki Rainbow"]=true},["Value Speed Fly Boat"]=3,["Hop Find Full Moon"]=false,["Auto Trial Draco"]=false,["Auto Aimbot Gun"]=false,["Fruits v2 Account Help"]=false,["Auto New World"]=false,["Drive Boat To Hydra"]=false,["Auto Summon Soul Ember"]=false,["Summon Dough King"]=false,["Auto Store Fruit"]=false,["Auto Sell Fishing"]=false,["Auto Get Fully Cyborg"]=false,["Use Click M1 Skull Guitar Leviathan"]=false,["Walk On Water"]=true,["ESP Island"]=false,["Multi Find Leviathan"]=false,["Auto Magnet Event"]=false,["Auto Buy Boat Beast Hunter"]=false,["Auto Get Rainbow Haki"]=false,["Boost Fps"]=false,["Fruits"]={["Farm Mastery Fruits"]=true,["Fruits Eat"]={"Gravity-Gravity","Pain-Pain"},["Auto Eat Fruits"]=false},["Auto Spawn Kitsune Island"]=false,["Auto Dragon Talon"]=false,["Change JumpPower"]=false,["Skill X Melee"]=0.5,["Hop Server [ Haki Color / Legendary Sword ]"]=false,["Hop Server Elite Hunter"]=false,["Auto Upgrade Sword Inventory"]=false,["Random Devil Fruit"]=false,["Auto Secret Quest"]=false,["Auto Aimbot"]=false,["Kill All Boss"]=false,["Sharkman Need Fish"]=false,["Use Your Boat Beast Hunter"]=false,["Min Player Join Dungeon"]=2,["Auto Yoru Mini (Hop Server)"]=false,["Auto Farm Observation"]=false,["Use Dragonstorm For Sea Event"]=false,["Auto Touch Pad Haki"]=false,["Attack Dough King"]=false,["Auto Yoru Mini"]=false,["Setup Kaitun v4 [ Fully ]"]=false,["Tween Safe if have Items"]=false,["Kill Aura Only Raid And Volcano"]=false,["Auto Get Ghoul"]=false,["Auto Finish Train Quest"]=false,["Skill F Blox Fruit"]=0.5,["Account Main"]=false,["Auto Get Cyborg"]=false,["Skill C Blox Fruit"]=0.5,["Auto Turn On V3 Near Door"]=false,["Auto Factory"]=false,["White Screen"]=false,["Notify Event Auto Refresh"]=false,["Auto Sharkman Karate V3"]=false,["Auto Dodge Skill Terrorshark"]=false,["Hop Find Boss [ Cake Prince / Tyrant of the Skies ]"]=false,["Auto TTK"]=false,["Use Click M1 Fruit Leviathan"]=false,["Auto Change Dragonstorm With Kill Leviathan"]=false,["Auto Raid"]=false,["% Health Player"]=40,["Auto Craft Haki Color [ Fully ]"]=false,["Auto Third World"]=false,["MiscItem"]={["Pole1st"]=true,["Dragon Trident"]=true,["Rengoku"]=true,["Spikey Trident"]=true,["Buddy"]=true,["Feathered Visage"]=true,["Gravity Blade"]=true,["Venom Bow"]=true,["Canvander"]=true,["Twin Hooks"]=true},["Kill Boss"]=false,["Auto Click"]=true,["Teleport Boat Other CFrame if Rough Sea"]=false,["Auto Electric Claw"]=false,["Speed Boat Auto Drive"]=300,["Auto Shark Anchor [ Fully ]"]=false,["Auto Pirate Raid"]=false,["Accept Quest [ Cake / Bone / Tiki ]"]=false,["Skill Z Sword"]=0.5,["Auto Collect Fruits"]=false,["Teleport To Kitsune Island"]=false,["Time Hop Server"]=5,["Will Back When over 10km"]=false,["Skill Z Gun"]=0.5,["Auto Find Leviathan"]=false,["Value Collect Chest to Hop"]=20,["Hop Find Fruits / Berries / Chests"]=false,["Auto Sea Event"]=false,["Auto Stats"]=false,["Auto Redeem Code"]=true,["Select Weapon"]="Melee",["Auto Sanguine Art"]=false,["Kill Aura With DragonStorm"]=false,["Auto Get Observation v1-2 [ Fully ]"]=false,["Farm Mob"]=false,["Use Click M1 Skull Guitar For Sea Event"]=false,["Auto CDK"]=false,["Auto Crafting Volcanic Magnet"]=false,["Hop Sever Raid"]=false,["Auto Turn On Observation"]=true,["Speed Tween"]=177,["Auto Join Dungeon"]=false,["Setting"]={["White Screen"]=false,["UiCheckItem"]=false},["Attack Darkbeard"]=false,["Auto Dodge Skill Mobs"]=false,["No Fog"]=false,["Auto Change Dragonstorm When Kill Boat"]=false,["Auto Turn On V3"]=false,["Tween Boat To Frozen Dimension"]=false,["Distance Teleport Y"]=0,["Skill Z Melee"]=0.5,["Select Method Farm"]="Level",["Just Use Skill when Player Active Ken"]=false,["Value Speed Tween Boat"]=250,["Dough King [ Fully ]"]=false,["Auto Start Leviathan"]=false,["ESP Berry"]=false,["Auto Multi Raid"]=false,["Auto Advanced Combat"]=false,["Change WalkSpeed"]=false,["Auto Pull Lever"]=false,["Auto Sharkman Karate"]=false,["Auto Buy Spy"]=false,["Auto Tushita"]=false,["Ignore Craft Volcanic Magnet Draco"]=false,["Auto Destroy IDK"]=false,["Ignore Boss"]=false,["Value Damage Multi Segments"]=30000,["Fully Trial Draco"]=false,["Auto Dojo Trainer"]=false,["Auto Trial"]=false,["Account Buy Chip"]=false,["Auto Get Cyborg Hop Collect Chest"]=false,["Kill players When complete Trial"]=false,["Time Delay Kill"]=5,["Use skill fast dont hold"]=false,["Auto Collect Bone"]=false,["Webhook Find Prehistoric Island"]=false,["Auto Get Full Melee [ Fully ]"]=false,["Use Click M1 Fruit For Sea Event"]=false,["Notify Event Only Current Sea"]=true,["Values Azure Ember"]=10,["Auto Turn On V4"]=false,["Input WalkSpeed"]=200,["Hop Server Kitsune Island"]=false,["Auto Pick Card Dungeon"]=false,["Spam Join"]=false,["Auto Farm Mastery 600 Sword In Inventory"]=false,["Auto Collect Chests"]=false,["Summon Soul Reaper"]=false,["Auto Yama"]=false,["Summon Darkbeard"]=false,["Buy Blox Fruit Sniper Shop"]=false,["Random Magnet Event"]=false,["Auto Trade Bone"]=false,["Hop Find Mirage Island [ Pull Lever ]"]=false,["Auto Open Chest"]=false,["Attack Multi Segments Leviathan"]=false,["Auto Saber"]=false,["Change Speed Boat"]=false,["Auto Buy Chip and Attack Law"]=false,["Auto Reset Vip Leviathan"]=false,["Collect Chest When Server Spawn Legend Items"]=false,["Distance Farm Aura"]=5000,["Auto Soul Guitar"]=false,["Hop Find Darkbeard"]=false,["Hop Server When Farm Observation"]=false,["Hop Server Find Boss"]=false,["Remove Notifications"]=true,["Auto Buy Chip For Account Select"]=false,["Farm Mastery"]=false,["Skill Z Blox Fruit"]=0.5,["Webhook Upgrade V4 + Train"]=false,["Auto Load Script"]=false,["Teleport Y"]=false,["Auto Upgrade Race V2-V3"]=false,["Drive Boat To Tiki"]=false,["Hop Find Dough King"]=false,["Auto Return Dungeon"]=false,["Select Skills Melee"]={["X"]=true,["C"]=true,["Z"]=true},["Skill X Blox Fruit"]=0.5,["Auto Observation v2"]=false,["Auto Slap Battle"]=false,["Select Skills Blox Fruit"]={["X"]=true,["C"]=true,["Z"]=true,["V"]=true,["F"]=true},["Skill C Melee"]=0.5,["Bring Mob Count"]=6,["Teleport Frozen Dimension"]=false,["Auto Awake Fruit"]=false,["Black Screen"]=false,["Auto Collect Soul Ember"]=false,["Auto Repair Ur Ship"]=false,["Attack Soul Reaper"]=false,["Account Start Dungeon"]=false,["Auto Dragon Hunter"]=false,["Auto Attack Leviathan"]=false,["Stack Train With Trial Race"]=false,["Auto rejoin Disconnect"]=false,["Fly Boat"]=false,["Auto Find Mirage"]=false,["Bring Mob"]=true,["Teleport Player"]=false,["Account Pick Slot Raid"]=false,["Attack No Animation"]=true,["Darkbeard [ Fully ]"]=false,["Auto Fishing"]=false,["Auto Choose Gear Draco"]=false,["Tween Until Have Sea Event"]=false,["Start Farm"]=true,["Auto Buy Gear Draco"]=false,["Auto Get Draco"]=false,["Webhook Destroy IDK"]=false,["Hop Server Get Ghoul"]=false,["Auto Choose Gears"]=false,["Teleport Acient Clock"]=false,["Auto Summon Rip Indra"]=false,["Auto Reset Character"]=false,["Auto Attack Dungeon"]=false,["Skill X Gun"]=0.5,["Auto Elite Hunter"]=false,["Auto Tween To Event Fishing Spot"]=false,["ESP Fruit"]=false,["Auto Buy Legendary Sword"]=false,["Auto Change Dragonstorm With Skull Guitar"]=false,["Noclip"]=false,["Get Fruit In Inventory Low Beli"]=false,["Attack Rip Indra"]=false,["Farm Material"]=false,["Ping Discord"]=false,["Use Portal Fruit Teleport"]=false,["Select Skills Gun"]={["Z"]=true,["X"]=true},["Skill X Sword"]=0.5,["Reset Character Buy Boat"]=false,["Auto Collect Berries"]=false,["Auto Turn On Buso"]=true,["Health %"]=40,["Webhook Store Fruit"]=false,["Auto Quest Fruits v2"]=false,["Auto Sea Event With Friend"]=false,["Auto Upgrade Dragon Talon"]=false,["Auto Farm Mastery 600 Melees"]=false,["Auto Upgrade Gun Inventory"]=false,["Auto God Human"]=true,["Select Skills Sword"]={["Z"]=true,["X"]=true},["Prevent Security Kick"]=true,["Auto Event Prehistoric Island"]=false,["Hidden Hop Dead Hour"]=true,["Use Skill when Kill Player"]=false,["Fully Event Prehistoric Island"]=false,["Auto Super Human"]=false,["Auto Collect Egg"]=false,["Auto Death Step"]=false,["ESP Player"]=false,["Change Size Reel"]=false,["Webhook"]={["Enable"]=false,["UrlWebhook"]=""},["Input JumpPower"]=200,["Ignore Collect Bone"]=false,["MainItem"]={["Hallow Scythe"]=true,["Get 3 Legendary Colors Haki"]=true,["Skull Guitar"]=true,["Cursed Dual Katana"]=true,["GodHuman"]=true,["Saber"]=true},["Auto Find Prehistoric Island"]=false,["Auto Buy Gear"]=false,["Noti Profile"]=false,["Skill V Blox Fruit"]=0.5,["Webhook Find Leviathan"]=false,["Webhook Find Mirage"]=false,["Auto Buy Haki Color Recipe"]=false,["Auto Upgrade Race V2-V3 Draco"]=false,["Auto Accept Quest Fishing"]=false,["Value Speed Boat"]=200
+        ["Auto Fire Shoot Heart Leviathan"]=false,["Noti Profile"]=false,["Auto Finish Train Draco Quest"]=false,["Auto Dodge Skill Seabeast"]=false,["Account Help"]=false,["Auto Reset When Complete Volcano"]=false,["Ignore Craft Volcanic Magnet"]=false,["Auto Trade Azure Ember"]=false,["Value Speed Fly Boat"]=3,["Hop Find Full Moon"]=false,["Auto Trial Draco"]=false,["Auto Aimbot Gun"]=false,["Fruits v2 Account Help"]=false,["Auto New World"]=false,["Drive Boat To Hydra"]=false,["Auto Summon Soul Ember"]=false,["Summon Dough King"]=false,["Auto Store Fruit"]=false,["Auto Sell Fishing"]=false,["Auto Get Fully Cyborg"]=false,["Use Click M1 Skull Guitar Leviathan"]=false,["Walk On Water"]=true,["ESP Island"]=false,["Multi Find Leviathan"]=false,["Auto Magnet Event"]=false,["Auto Buy Boat Beast Hunter"]=false,["Auto Get Rainbow Haki"]=false,["Boost Fps"]=true,["Auto Spawn Kitsune Island"]=false,["Auto Dragon Talon"]=false,["Change JumpPower"]=false,["Skill X Melee"]=0.5,["Hop Server [ Haki Color / Legendary Sword ]"]=false,["Hop Server Elite Hunter"]=false,["Auto Upgrade Sword Inventory"]=false,["Random Devil Fruit"]=false,["Auto Secret Quest"]=false,["Auto Aimbot"]=false,["Select Mob"]={["Factory Staff [Lv. 800]"]=true},["Auto God Human"]=false,["Sharkman Need Fish"]=false,["Auto Tween To Event Fishing Spot"]=false,["Min Player Join Dungeon"]=2,["Auto Yoru Mini (Hop Server)"]=false,["Auto Farm Observation"]=false,["Use Dragonstorm For Sea Event"]=false,["Auto Touch Pad Haki"]=false,["Attack Dough King"]=false,["Auto Yoru Mini"]=false,["Setup Kaitun v4 [ Fully ]"]=false,["Tween Safe if have Items"]=false,["Kill Aura Only Raid And Volcano"]=false,["Auto Get Ghoul"]=false,["Auto Finish Train Quest"]=false,["Skill F Blox Fruit"]=0.5,["Account Main"]=false,["Auto Get Cyborg"]=false,["Skill C Blox Fruit"]=0.5,["Auto Turn On V3 Near Door"]=false,["Auto Factory"]=false,["Interface Scale"]=90,["White Screen"]=false,["Notify Event Auto Refresh"]=false,["Auto Sharkman Karate V3"]=false,["Auto Dodge Skill Terrorshark"]=false,["Hop Find Boss [ Cake Prince / Tyrant of the Skies ]"]=false,["Auto TTK"]=false,["Use Click M1 Fruit Leviathan"]=false,["Auto Change Dragonstorm With Kill Leviathan"]=false,["Auto Raid"]=false,["% Health Player"]=71,["Auto Craft Haki Color [ Fully ]"]=false,["Auto Third World"]=false,["Kill Boss"]=false,["Auto Click"]=true,["Teleport Boat Other CFrame if Rough Sea"]=false,["Auto Electric Claw"]=false,["Speed Boat Auto Drive"]=349,["Auto Shark Anchor [ Fully ]"]=false,["Auto Pirate Raid"]=false,["Accept Quest [ Cake / Bone / Tiki ]"]=true,["Skill Z Sword"]=0.5,["Auto Collect Fruits"]=false,["Teleport To Kitsune Island"]=false,["Time Hop Server"]=5,["Will Back When over 10km"]=false,["Skill Z Gun"]=0.5,["Auto Find Leviathan"]=false,["Value Collect Chest to Hop"]=20,["Hop Find Fruits / Berries / Chests"]=false,["Auto Sea Event"]=false,["Auto Stats"]=false,["Select Weapon"]="Melee",["Auto Sanguine Art"]=false,["Kill Aura With DragonStorm"]=false,["Auto Get Observation v1-2 [ Fully ]"]=false,["Farm Mob"]=false,["Use Click M1 Skull Guitar For Sea Event"]=false,["Auto CDK"]=false,["Auto Crafting Volcanic Magnet"]=false,["Hop Sever Raid"]=false,["Auto Turn On Observation"]=true,["Speed Tween"]=181,["Auto Join Dungeon"]=false,["Attack Darkbeard"]=false,["Auto Dodge Skill Mobs"]=false,["No Fog"]=false,["Auto Change Dragonstorm When Kill Boat"]=false,["Auto Turn On V3"]=false,["Tween Boat To Frozen Dimension"]=false,["Distance Teleport Y"]=800,["Skill Z Melee"]=0.5,["Select Method Farm"]="Cake",["Just Use Skill when Player Active Ken"]=false,["Value Speed Tween Boat"]=250,["Dough King [ Fully ]"]=false,["Auto Start Leviathan"]=false,["ESP Berry"]=false,["Ignore Collect Bone"]=false,["Auto Advanced Combat"]=false,["Change WalkSpeed"]=false,["Auto Pull Lever"]=false,["Auto Fishing"]=false,["Auto Buy Spy"]=false,["Auto Tushita"]=false,["Ignore Craft Volcanic Magnet Draco"]=false,["Auto Destroy IDK"]=false,["Ignore Boss"]=true,["Value Damage Multi Segments"]=131411,["Fully Trial Draco"]=false,["Auto Dojo Trainer"]=false,["Auto Trial"]=false,["Account Buy Chip"]=false,["Auto Get Cyborg Hop Collect Chest"]=false,["Kill players When complete Trial"]=false,["Time Delay Kill"]=3,["Use skill fast dont hold"]=false,["Auto Collect Bone"]=false,["Webhook Find Prehistoric Island"]=false,["Auto Get Full Melee [ Fully ]"]=false,["Use Click M1 Fruit For Sea Event"]=false,["Skill X Sword"]=0.5,["Values Azure Ember"]=10,["Auto Turn On V4"]=false,["Fps Cap"]=10,["Input WalkSpeed"]=200,["Hop Server Kitsune Island"]=false,["Auto Pick Card Dungeon"]=false,["Spam Join"]=false,["Auto Farm Mastery 600 Sword In Inventory"]=false,["Auto Collect Chests"]=false,["Summon Soul Reaper"]=false,["Auto Yama"]=false,["Summon Darkbeard"]=false,["Buy Blox Fruit Sniper Shop"]=false,["Random Magnet Event"]=false,["Auto Trade Bone"]=false,["Hop Find Mirage Island [ Pull Lever ]"]=false,["Auto Open Chest"]=false,["Attack Multi Segments Leviathan"]=false,["Auto Saber"]=false,["Change Speed Boat"]=false,["Auto Buy Chip and Attack Law"]=false,["Auto Reset Vip Leviathan"]=false,["Collect Chest When Server Spawn Legend Items"]=false,["Distance Farm Aura"]=5000,["Auto Soul Guitar"]=false,["Hop Find Darkbeard"]=false,["Hop Server When Farm Observation"]=false,["Value Speed Boat"]=200,["Interface Text Boost"]=0,["Auto Buy Chip For Account Select"]=false,["Farm Mastery"]=false,["Auto Upgrade Race V2-V3 Draco"]=false,["Auto Death Step"]=false,["Auto Load Script"]=true,["Webhook Upgrade V4 + Train"]=false,["Auto Upgrade Race V2-V3"]=false,["Drive Boat To Tiki"]=false,["Webhook Find Mirage"]=false,["Auto Farm Mastery 600 Gun In Inventory"]=false,["Auto Slap Battle"]=false,["Webhook Find Leviathan"]=false,["Auto Observation v2"]=false,["Notify Event Only Current Sea"]=true,["Select Skills Blox Fruit"]={["X"]=true,["C"]=true,["Z"]=true,["F"]=true,["V"]=true},["Black Screen"]=false,["Bring Mob Count"]=6,["Skill X Blox Fruit"]=0.5,["Change Size Reel"]=false,["Skill C Melee"]=0,["Teleport Player"]=false,["Auto Dragon Hunter"]=false,["Input JumpPower"]=251,["Account Start Dungeon"]=false,["Account Pick Slot Raid"]=false,["Auto Multi Raid"]=false,["Stack Train With Trial Race"]=false,["Auto rejoin Disconnect"]=false,["ESP Player"]=false,["Auto Find Mirage"]=false,["Bring Mob"]=true,["Auto Sharkman Karate"]=false,["Select Skills Sword"]={["X"]=true,["Z"]=true},["Fully Event Prehistoric Island"]=false,["Darkbeard [ Fully ]"]=false,["Attack No Animation"]=true,["Start Farm"]=true,["Auto Collect Egg"]=false,["Hop Server Get Ghoul"]=false,["Auto Awake Fruit"]=false,["Auto Get Draco"]=false,["Webhook Destroy IDK"]=false,["Auto Upgrade Dragon Talon"]=false,["Auto Choose Gears"]=false,["Auto Attack Dungeon"]=false,["Auto Upgrade Gun Inventory"]=false,["Auto Buy Legendary Sword"]=false,["ESP Fruit"]=false,["Auto Farm Mastery 600 Melees"]=false,["Auto Elite Hunter"]=false,["Health %"]=40,["Auto Collect Soul Ember"]=false,["Fly Boat"]=false,["Auto Change Dragonstorm With Skull Guitar"]=false,["Auto Reset Character"]=false,["Select Skills Melee"]={["X"]=true,["C"]=true,["Z"]=true},["Attack Rip Indra"]=false,["Farm Material"]=false,["Ping Discord"]=false,["Use Portal Fruit Teleport"]=false,["Noclip"]=false,["Skill V Blox Fruit"]=0.5,["Reset Character Buy Boat"]=false,["Skill X Gun"]=0.5,["Get Fruit In Inventory Low Beli"]=false,["Use Your Boat Beast Hunter"]=false,["Webhook Store Fruit"]=false,["Auto Collect Berries"]=false,["Auto Sea Event With Friend"]=false,["Teleport Y"]=false,["Auto Quest Fruits v2"]=false,["Auto Summon Rip Indra"]=false,["Tween Until Have Sea Event"]=false,["Teleport Acient Clock"]=false,["Prevent Security Kick"]=true,["Auto Buy Gear Draco"]=false,["Auto Event Prehistoric Island"]=false,["Use Skill when Kill Player"]=false,["Auto Repair Ur Ship"]=false,["Auto Super Human"]=false,["Auto Choose Gear Draco"]=false,["Hidden Hop Dead Hour"]=true,["Auto Turn On Buso"]=true,["Select Zone"]="Zone 3",["Teleport Frozen Dimension"]=false,["Auto Attack Leviathan"]=false,["Attack Soul Reaper"]=false,["Auto Return Dungeon"]=false,["Auto Find Prehistoric Island"]=false,["Auto Buy Gear"]=false,["Select Skills Gun"]={["X"]=true,["Z"]=true},["Kill All Boss"]=false,["Hop Find Dough King"]=false,["Remove Notifications"]=true,["Auto Buy Haki Color Recipe"]=false,["Skill Z Blox Fruit"]=0.5,["Auto Accept Quest Fishing"]=false,["Hop Server Find Boss"]=false
     }
 end
 
-local BELI_OVERRIDES = {
-    ["Select Method Farm"] = "Cake", ["Accept Quest [ Cake / Bone / Tiki ]"] = true, ["Ignore Boss"] = true,
-    ["% Health Player"] = 71, ["Time Delay Kill"] = 3, ["Speed Tween"] = 181, ["Input JumpPower"] = 251,
-    ["Value Damage Multi Segments"] = 131411, ["Speed Boat Auto Drive"] = 349, ["Skill C Melee"] = 0, ["Distance Teleport Y"] = 800,
-    ["Auto God Human"] = false,
-    ["Auto Redeem Code"] = true,
-}
+-- Carried over verbatim from v19 (Vxeze Hub config table).
+local function GetVxezeLevelConfig()
+    return {
+        ["Auto Fire Shoot Heart Leviathan"]=false,["Auto Farm Mastery 600 Gun In Inventory"]=false,["Auto Finish Train Draco Quest"]=false,["Auto Dodge Skill Seabeast"]=false,["Account Help"]=false,["Auto Reset When Complete Volcano"]=false,["Ignore Craft Volcanic Magnet"]=false,["Auto Trade Azure Ember"]=false,["Quest"]={["Race V2-V3"]=true,["Haki Rainbow"]=true},["Value Speed Fly Boat"]=3,["Hop Find Full Moon"]=false,["Auto Trial Draco"]=false,["Auto Aimbot Gun"]=false,["Fruits v2 Account Help"]=false,["Auto New World"]=false,["Drive Boat To Hydra"]=false,["Auto Summon Soul Ember"]=false,["Summon Dough King"]=false,["Auto Store Fruit"]=false,["Auto Sell Fishing"]=false,["Auto Get Fully Cyborg"]=false,["Use Click M1 Skull Guitar Leviathan"]=false,["Walk On Water"]=true,["ESP Island"]=false,["Multi Find Leviathan"]=false,["Auto Magnet Event"]=false,["Auto Buy Boat Beast Hunter"]=false,["Auto Get Rainbow Haki"]=false,["Boost Fps"]=false,["Fruits"]={["Farm Mastery Fruits"]=true,["Fruits Eat"]={"Gravity-Gravity","Pain-Pain"},["Auto Eat Fruits"]=false},["Auto Spawn Kitsune Island"]=false,["Auto Dragon Talon"]=false,["Change JumpPower"]=false,["Skill X Melee"]=0.5,["Hop Server [ Haki Color / Legendary Sword ]"]=false,["Hop Server Elite Hunter"]=false,["Auto Upgrade Sword Inventory"]=false,["Random Devil Fruit"]=false,["Auto Secret Quest"]=false,["Auto Aimbot"]=false,["Kill All Boss"]=false,["Sharkman Need Fish"]=false,["Use Your Boat Beast Hunter"]=false,["Min Player Join Dungeon"]=2,["Auto Yoru Mini (Hop Server)"]=false,["Auto Farm Observation"]=false,["Use Dragonstorm For Sea Event"]=false,["Auto Touch Pad Haki"]=false,["Attack Dough King"]=false,["Auto Yoru Mini"]=false,["Setup Kaitun v4 [ Fully ]"]=false,["Tween Safe if have Items"]=false,["Kill Aura Only Raid And Volcano"]=false,["Auto Get Ghoul"]=false,["Auto Finish Train Quest"]=false,["Skill F Blox Fruit"]=0.5,["Account Main"]=false,["Auto Get Cyborg"]=false,["Skill C Blox Fruit"]=0.5,["Auto Turn On V3 Near Door"]=false,["Auto Factory"]=false,["White Screen"]=false,["Notify Event Auto Refresh"]=false,["Auto Sharkman Karate V3"]=false,["Auto Dodge Skill Terrorshark"]=false,["Hop Find Boss [ Cake Prince / Tyrant of the Skies ]"]=false,["Auto TTK"]=false,["Use Click M1 Fruit Leviathan"]=false,["Auto Change Dragonstorm With Kill Leviathan"]=false,["Auto Raid"]=false,["% Health Player"]=40,["Auto Craft Haki Color [ Fully ]"]=false,["Auto Third World"]=false,["MiscItem"]={["Pole1st"]=true,["Dragon Trident"]=true,["Rengoku"]=true,["Spikey Trident"]=true,["Buddy"]=true,["Feathered Visage"]=true,["Gravity Blade"]=true,["Venom Bow"]=true,["Canvander"]=true,["Twin Hooks"]=true},["Kill Boss"]=false,["Auto Click"]=true,["Teleport Boat Other CFrame if Rough Sea"]=false,["Auto Electric Claw"]=false,["Speed Boat Auto Drive"]=300,["Auto Shark Anchor [ Fully ]"]=false,["Auto Pirate Raid"]=false,["Accept Quest [ Cake / Bone / Tiki ]"]=false,["Skill Z Sword"]=0.5,["Auto Collect Fruits"]=false,["Teleport To Kitsune Island"]=false,["Time Hop Server"]=5,["Will Back When over 10km"]=false,["Skill Z Gun"]=0.5,["Auto Find Leviathan"]=false,["Value Collect Chest to Hop"]=20,["Hop Find Fruits / Berries / Chests"]=false,["Auto Sea Event"]=false,["Auto Stats"]=false,["Select Weapon"]="Melee",["Auto Sanguine Art"]=false,["Kill Aura With DragonStorm"]=false,["Auto Get Observation v1-2 [ Fully ]"]=false,["Farm Mob"]=false,["Use Click M1 Skull Guitar For Sea Event"]=false,["Auto CDK"]=false,["Auto Crafting Volcanic Magnet"]=false,["Hop Sever Raid"]=false,["Auto Turn On Observation"]=true,["Speed Tween"]=177,["Auto Join Dungeon"]=false,["Setting"]={["White Screen"]=false,["UiCheckItem"]=false},["Attack Darkbeard"]=false,["Auto Dodge Skill Mobs"]=false,["No Fog"]=false,["Auto Change Dragonstorm When Kill Boat"]=false,["Auto Turn On V3"]=false,["Tween Boat To Frozen Dimension"]=false,["Distance Teleport Y"]=0,["Skill Z Melee"]=0.5,["Select Method Farm"]="Level",["Just Use Skill when Player Active Ken"]=false,["Value Speed Tween Boat"]=250,["Dough King [ Fully ]"]=false,["Auto Start Leviathan"]=false,["ESP Berry"]=false,["Auto Multi Raid"]=false,["Auto Advanced Combat"]=false,["Change WalkSpeed"]=false,["Auto Pull Lever"]=false,["Auto Sharkman Karate"]=false,["Auto Buy Spy"]=false,["Auto Tushita"]=false,["Ignore Craft Volcanic Magnet Draco"]=false,["Auto Destroy IDK"]=false,["Ignore Boss"]=false,["Value Damage Multi Segments"]=30000,["Fully Trial Draco"]=false,["Auto Dojo Trainer"]=false,["Auto Trial"]=false,["Account Buy Chip"]=false,["Auto Get Cyborg Hop Collect Chest"]=false,["Kill players When complete Trial"]=false,["Time Delay Kill"]=5,["Use skill fast dont hold"]=false,["Auto Collect Bone"]=false,["Webhook Find Prehistoric Island"]=false,["Auto Get Full Melee [ Fully ]"]=false,["Use Click M1 Fruit For Sea Event"]=false,["Notify Event Only Current Sea"]=true,["Values Azure Ember"]=10,["Auto Turn On V4"]=false,["Input WalkSpeed"]=200,["Hop Server Kitsune Island"]=false,["Auto Pick Card Dungeon"]=false,["Spam Join"]=false,["Auto Farm Mastery 600 Sword In Inventory"]=false,["Auto Collect Chests"]=false,["Summon Soul Reaper"]=false,["Auto Yama"]=false,["Summon Darkbeard"]=false,["Buy Blox Fruit Sniper Shop"]=false,["Random Magnet Event"]=false,["Auto Trade Bone"]=false,["Hop Find Mirage Island [ Pull Lever ]"]=false,["Auto Open Chest"]=false,["Attack Multi Segments Leviathan"]=false,["Auto Saber"]=false,["Change Speed Boat"]=false,["Auto Buy Chip and Attack Law"]=false,["Auto Reset Vip Leviathan"]=false,["Collect Chest When Server Spawn Legend Items"]=false,["Distance Farm Aura"]=5000,["Auto Soul Guitar"]=false,["Hop Find Darkbeard"]=false,["Hop Server When Farm Observation"]=false,["Hop Server Find Boss"]=false,["Remove Notifications"]=true,["Auto Buy Chip For Account Select"]=false,["Farm Mastery"]=false,["Skill Z Blox Fruit"]=0.5,["Webhook Upgrade V4 + Train"]=false,["Auto Load Script"]=false,["Teleport Y"]=false,["Auto Upgrade Race V2-V3"]=false,["Drive Boat To Tiki"]=false,["Hop Find Dough King"]=false,["Auto Return Dungeon"]=false,["Select Skills Melee"]={["X"]=true,["C"]=true,["Z"]=true},["Skill X Blox Fruit"]=0.5,["Auto Observation v2"]=false,["Auto Slap Battle"]=false,["Select Skills Blox Fruit"]={["X"]=true,["C"]=true,["Z"]=true,["V"]=true,["F"]=true},["Skill C Melee"]=0.5,["Bring Mob Count"]=6,["Teleport Frozen Dimension"]=false,["Auto Awake Fruit"]=false,["Black Screen"]=false,["Auto Collect Soul Ember"]=false,["Auto Repair Ur Ship"]=false,["Attack Soul Reaper"]=false,["Account Start Dungeon"]=false,["Auto Dragon Hunter"]=false,["Auto Attack Leviathan"]=false,["Stack Train With Trial Race"]=false,["Auto rejoin Disconnect"]=false,["Fly Boat"]=false,["Auto Find Mirage"]=false,["Bring Mob"]=true,["Teleport Player"]=false,["Account Pick Slot Raid"]=false,["Attack No Animation"]=true,["Darkbeard [ Fully ]"]=false,["Auto Fishing"]=false,["Auto Choose Gear Draco"]=false,["Tween Until Have Sea Event"]=false,["Start Farm"]=true,["Auto Buy Gear Draco"]=false,["Auto Get Draco"]=false,["Webhook Destroy IDK"]=false,["Hop Server Get Ghoul"]=false,["Auto Choose Gears"]=false,["Teleport Acient Clock"]=false,["Auto Summon Rip Indra"]=false,["Auto Reset Character"]=false,["Auto Attack Dungeon"]=false,["Skill X Gun"]=0.5,["Auto Elite Hunter"]=false,["Auto Tween To Event Fishing Spot"]=false,["ESP Fruit"]=false,["Auto Buy Legendary Sword"]=false,["Auto Change Dragonstorm With Skull Guitar"]=false,["Noclip"]=false,["Get Fruit In Inventory Low Beli"]=false,["Attack Rip Indra"]=false,["Farm Material"]=false,["Ping Discord"]=false,["Use Portal Fruit Teleport"]=false,["Select Skills Gun"]={["Z"]=true,["X"]=true},["Skill X Sword"]=0.5,["Reset Character Buy Boat"]=false,["Auto Collect Berries"]=false,["Auto Turn On Buso"]=true,["Health %"]=40,["Webhook Store Fruit"]=false,["Auto Quest Fruits v2"]=false,["Auto Sea Event With Friend"]=false,["Auto Upgrade Dragon Talon"]=false,["Auto Farm Mastery 600 Melees"]=false,["Auto Upgrade Gun Inventory"]=false,["Auto God Human"]=false,["Select Skills Sword"]={["Z"]=true,["X"]=true},["Prevent Security Kick"]=true,["Auto Event Prehistoric Island"]=false,["Hidden Hop Dead Hour"]=true,["Use Skill when Kill Player"]=false,["Fully Event Prehistoric Island"]=false,["Auto Super Human"]=false,["Auto Collect Egg"]=false,["Auto Death Step"]=false,["ESP Player"]=false,["Change Size Reel"]=false,["Webhook"]={["Enable"]=false,["UrlWebhook"]=""},["Input JumpPower"]=200,["Ignore Collect Bone"]=false,["MainItem"]={["Hallow Scythe"]=true,["Get 3 Legendary Colors Haki"]=true,["Skull Guitar"]=true,["Cursed Dual Katana"]=true,["GodHuman"]=true,["Saber"]=true},["Auto Find Prehistoric Island"]=false,["Auto Buy Gear"]=false,["Noti Profile"]=false,["Skill V Blox Fruit"]=0.5,["Webhook Find Leviathan"]=false,["Webhook Find Mirage"]=false,["Auto Buy Haki Color Recipe"]=false,["Auto Upgrade Race V2-V3 Draco"]=false,["Auto Accept Quest Fishing"]=false,["Value Speed Boat"]=200
+    }
+end
 
-local BELI_LEGACY_UI = {
-    ["Boost Fps"] = true, ["Fps Cap"] = 10, ["Interface Scale"] = 90, ["Interface Text Boost"] = 0, ["Select Zone"] = "Zone 3"
-}
+
+
+-- BF-Kaitun config, same structure as the hub's example. Overrides are applied in Vx.applyKaitun.
+local function GetKaitunConfig()
+    return { ["Blox Fruits"] = {
+        ["Hide UI"] = false, ["Select Team"] = "Pirates", ["White Screen"] = false, ["Speed Tween"] = 200,
+        ["Lock Fps"] = { ["Enabled"] = true, ["FPS"] = 30 },
+        ["Get Items"] = { ["Saber"] = true, ["Godhuman"] = true, ["Skull Guitar"] = true, ["Mirror Fractal"] = true,
+            ["Cursed Dual Katana"] = true, ["Shark Anchor"] = true },
+        ["Get Rare Items"] = { ["Rengoku"] = false, ["Dragon Trident"] = false, ["Pole (1st Form)"] = false, ["Gravity Blade"] = false },
+        ["Get Race"] = { ["Race Quest"] = { ["Enabled"] = false, ["Race"] = { "Ghoul" } }, ["Pull Lever"] = true },
+        ["Auto Awaken Fruit"] = false,
+        ["Farm Fragments"] = { ["Enabled"] = false, ["Fragment"] = 50000 },
+        ["Summon Rip Indra"] = true,
+        ["Select Hop"] = { ["Hop If Found Near Exploiter"] = false, ["Hop Find rip_indra True Form"] = false,
+            ["Hop Find Dough King"] = false, ["Hop Find Raids Castle"] = false, ["Hop Find Cake Queen"] = false,
+            ["Hop Find Soul Reaper"] = false, ["Hop Find Darkbeard"] = false, ["Hop Find Mirage"] = false },
+        ["Farm Mastery"] = { ["Enabled"] = false, ["Mode"] = "Bone", ["Weapon Farm"] = { "Sword", "Melee" } },
+        ["Sniper Fruit Shop"] = { ["Enabled"] = true, ["Fruit"] = { "Leopard-Leopard", "Kitsune-Kitsune", "Dragon-Dragon", "Yeti-Yeti", "Gas-Gas" } },
+        ["Lock Fruit"] = {},
+        ["Secret Quest"] = { ["Enabled"] = false },
+        ["Webhook"] = { ["Enabled"] = false, ["Ping Discord"] = "<@>", ["Url"] = "" },
+    } }
+end
 
 ----------------------------------------------------------------
 -- 1. GLOBALS
@@ -115,21 +153,22 @@ local UID = tostring(LP.UserId)
 
 repeat task.wait(1) until game:IsLoaded()
 local PG = LP:WaitForChild("PlayerGui")
+-- WHY: v19 used WaitForChild without timeout and could hang forever in a place that has no Remotes folder.
 local Remotes = RS:WaitForChild("Remotes", 30)
 
+-- Unload a previous instance (re-execution) before creating any state.
 if env.BloxSM and env.BloxSM.Unload then pcall(env.BloxSM.Unload) end
 
-local S = { alive = true, conns = {}, beats = {} }
+local S = { alive = true, conns = {}, beats = {} }      -- global run state; S.beats[name] = last heartbeat of a service
 local Log, FS, Task, WH, Group, Store, Rot, Sess, Dead = {}, {}, {}, {}, {}, {}, {}, {}, {}
 local Vx, Noti, Input, Team, Farm, Gacha, Sea, UI, Watch, Stats = {}, {}, {}, {}, {}, {}, {}, {}, {}, {}
-local Codes = {}
 
 local function clamp(x, lo, hi) if x < lo then return lo elseif x > hi then return hi end return x end
 local function hasHRP() local c = LP.Character return (c and c:FindFirstChild("HumanoidRootPart")) and true or false end
 local function commF() return Remotes and Remotes:FindFirstChild("CommF_") end
 
 ----------------------------------------------------------------
--- 2. CORE
+-- 2. CORE: file system, rotating log, task helpers
 ----------------------------------------------------------------
 function FS.ok() return type(isfile) == "function" and type(readfile) == "function" and type(writefile) == "function" end
 function FS.exists(p) if type(isfile) ~= "function" then return false end local ok, r = pcall(isfile, p) return ok and r and true or false end
@@ -152,8 +191,9 @@ function FS.writeJSON(p, t)
     return false
 end
 
+-- Rotating log: buffered in memory, flushed by a service, size-capped (current file + one ".1" backup).
 Log.path, Log.buf, Log.size = "BloxLog_" .. UID .. ".txt", {}, 0
-Log.size = FS.ok() and #(FS.read(Log.path) or "") or 0
+Log.size = FS.ok() and #(FS.read(Log.path) or "") or 0   -- WHY: the size cap must survive restarts, otherwise the log grows forever
 function Log.add(level, msg)
     local line = os.date("%H:%M:%S") .. " [" .. level .. "] " .. tostring(msg)
     Log.buf[#Log.buf + 1] = line
@@ -175,6 +215,7 @@ function Log.flush()
     end
 end
 
+-- Task.spawn: run fn in its own thread; errors are logged with a traceback instead of vanishing.
 function Task.spawn(name, fn, ...)
     local args = table.pack(...)
     return task.spawn(function()
@@ -182,6 +223,8 @@ function Task.spawn(name, fn, ...)
         if not ok then Log.add("E", name .. " crashed: " .. tostring(err)) end
     end)
 end
+-- Task.service: call fn repeatedly. fn may return a number (next delay) or false (stop the service).
+-- A crash is logged and retried with exponential backoff, so one bad tick never kills the loop (v19 had no isolation).
 function Task.service(name, interval, fn)
     Task.spawn(name, function()
         local failures = 0
@@ -205,37 +248,32 @@ function Task.service(name, interval, fn)
 end
 
 ----------------------------------------------------------------
--- 3. WEBHOOK
+-- 3. WEBHOOK MANAGER: queue, token bucket, 429 handling, shared backoff, crash-safe outbox
 ----------------------------------------------------------------
 WH.queues = { fruit = {}, report = {} }
 WH.tokens = { fruit = CFG.WH_BURST, report = CFG.WH_BURST }
 WH.lastRefill, WH.dirty, WH.touchedAt = {}, false, 0
 WH.outbox = "BloxOutbox_" .. UID .. ".json"
+-- How long a persisted message is still worth sending after a crash (seconds), per priority.
 WH.ITEM_TTL = { [1] = 6 * 3600, [2] = 24 * 3600, [3] = 72 * 3600 }
 
-WH.warned = {}
 function WH.url(target)
     local u = CFG.WEBHOOKS[target]
     if type(u) ~= "string" or u == "" or u == "REPLACE_ME" then return nil end
-    -- v22: a fragment / non-Discord string used to be queued, retried 6 times and dropped, forever and silently.
-    local good = u:find("^https://[%w%.%-]*discord%.com/api/webhooks/%d+/[%w%-_]+") or u:find("^https://[%w%.%-]*discordapp%.com/api/webhooks/%d+/[%w%-_]+")
-    if not good then
-        if not WH.warned[target] then
-            WH.warned[target] = true
-            Log.add("W", "webhook '" .. target .. "' is not a full https://discord.com/api/webhooks/<id>/<token> URL, target disabled")
-        end
-        return nil
-    end
     return u
 end
 function WH.pending() local n = 0 for _, q in pairs(WH.queues) do n = n + #q end return n end
 
+-- prio: 1 = report (droppable), 2 = important, 3 = critical (written to disk immediately).
+-- WHY every priority is persisted now: v20 only kept prio 2, so a "dead session" alert (prio 1) died with the process,
+-- which is exactly the moment the alert matters most.
 function WH.send(target, title, desc, color, prio)
     if not WH.url(target) then return false end
     local q = WH.queues[target]
     if not q then return false end
     prio = prio or 1
     if #q >= CFG.WH_QUEUE_MAX then
+        -- queue full: drop the oldest low-priority item first, otherwise the oldest item
         local idx = 1
         for i, it in ipairs(q) do if it.prio < 2 then idx = i break end end
         table.remove(q, idx)
@@ -247,7 +285,7 @@ function WH.send(target, title, desc, color, prio)
             footer = { text = "Account: " .. LP.Name }, timestamp = os.date("!%Y-%m-%dT%H:%M:%SZ") } } },
     }
     WH.dirty = true
-    if prio >= 3 then WH.saveOutbox() end
+    if prio >= 3 then WH.saveOutbox() end   -- write-ahead for critical messages; the pump debounces the rest to <= 1s
     return true
 end
 
@@ -255,11 +293,13 @@ local function headerGet(h, name)
     if type(h) ~= "table" then return nil end
     for k, v in pairs(h) do if string.lower(tostring(k)) == name then return v end end
 end
+-- Returns status code (nil = network error) and, for 429, the seconds to wait.
 function WH.post(url, payload)
     local req = (syn and syn.request) or request or http_request
     if not req then return nil end
+    -- WHY: an unencodable payload used to throw outside pcall and stayed at the head of the queue forever (poison pill)
     local okb, body = pcall(HttpService.JSONEncode, HttpService, payload)
-    if not okb then return 400 end
+    if not okb then return 400 end   -- treated as a permanent failure: the pump drops it
     local ok, res = pcall(req, { Url = url, Method = "POST", Headers = { ["Content-Type"] = "application/json" }, Body = body })
     if not ok or type(res) ~= "table" then return nil end
     local status = tonumber(res.StatusCode or res.Status)
@@ -270,7 +310,7 @@ function WH.post(url, payload)
             local okj, b = pcall(HttpService.JSONDecode, HttpService, res.Body or "{}")
             if okj and type(b) == "table" then retry = tonumber(b.retry_after) end
         end
-        if retry and retry > 600 then retry = retry / 1000 end
+        if retry and retry > 600 then retry = retry / 1000 end -- some endpoints answer in milliseconds
     end
     return status, retry
 end
@@ -303,14 +343,16 @@ function WH.import(items)
     end
     return n
 end
-function WH.loadOutbox()
+function WH.loadOutbox() -- crash recovery: messages that were queued but never delivered
     local d = FS.readJSON(WH.outbox)
-    local items = d and (d.items or d)
+    local items = d and (d.items or d)   -- v20 stored a bare array
     if type(items) ~= "table" then return end
     local n = WH.import(items)
     if n > 0 then Log.add("I", "outbox restored: " .. n .. " message(s)") WH.dirty = true end
 end
 
+-- Orphaned outboxes: the scheduler kills a client right after its session, so undelivered messages would otherwise
+-- wait until that account runs again (hours). Any live account adopts an outbox that stopped being refreshed.
 function WH.adopt()
     if type(listfiles) ~= "function" then return end
     local ok, files = pcall(listfiles, "")
@@ -320,6 +362,7 @@ function WH.adopt()
         if name:match("^BloxOutbox_%d+%.json$") and name ~= WH.outbox then
             local d = FS.readJSON(name)
             if type(d) == "table" and d.owner and tostring(d.owner) ~= UID and os.time() - (tonumber(d.savedAt) or 0) > CFG.WH_ORPHAN_AFTER then
+                -- claim by rewriting with our name, then re-read: narrows the double-adoption race between two live accounts
                 FS.writeJSON(name, { owner = UID, savedAt = os.time(), items = d.items })
                 task.wait(0.5 + math.random())
                 local chk = FS.readJSON(name)
@@ -334,6 +377,7 @@ function WH.adopt()
     end
 end
 
+-- One pump per target. WHY: v20 had a single loop, so one hung request to one webhook froze delivery to the other.
 function WH.pump(target)
     local q = WH.queues[target]
     local clock, now = os.clock(), os.time()
@@ -342,6 +386,7 @@ function WH.pump(target)
     WH.tokens[target] = math.min(CFG.WH_BURST, WH.tokens[target] + (clock - last) * CFG.WH_PER_MIN / 60)
     local item = q[1]
     if item and now >= item.notBefore and WH.tokens[target] >= 1 then
+        -- A shared hold file lets every account on this device back off together after one 429.
         local holdFile = "BloxWHHold_" .. target .. ".txt"
         local hold = tonumber(FS.read(holdFile)) or 0
         local url = WH.url(target)
@@ -359,10 +404,10 @@ function WH.pump(target)
                 item.notBefore = os.time() + wait
                 item.tries = item.tries + 1
             elseif status and status >= 400 and status < 500 then
-                table.remove(q, 1)
+                table.remove(q, 1) -- bad request / revoked webhook: retrying cannot help
                 Log.add("W", "webhook " .. target .. " rejected with HTTP " .. status .. ", message dropped")
                 WH.dirty = true
-            else
+            else -- network error or 5xx: exponential backoff
                 item.tries = item.tries + 1
                 item.notBefore = os.time() + math.min(300, 5 * 2 ^ item.tries)
             end
@@ -374,17 +419,17 @@ function WH.pump(target)
         end
     end
     if WH.dirty then WH.saveOutbox()
-    elseif WH.pending() > 0 and now - WH.touchedAt >= 30 then WH.saveOutbox() end
+    elseif WH.pending() > 0 and now - WH.touchedAt >= 30 then WH.saveOutbox() end   -- heartbeat: tells adopters we are alive
     return 1
 end
 
 ----------------------------------------------------------------
--- 4. GROUP LOCK
+-- 4. GROUP LOCK (async). Slot lock files: "Lock_<n>.txt" = uid|token|seq|timestamp
 ----------------------------------------------------------------
 Group.token = string.sub((HttpService:GenerateGUID(false):gsub("%-", "")), 1, 16)
 Group.id, Group.num, Group.ready, Group.lockOk, Group.lost, Group.seq = nil, nil, false, false, false, 0
 Group.waiters, Group.changeHooks, Group.acquiring, Group.provisionalUsed = {}, {}, false, nil
-Group.homePath = "BloxHome_" .. UID .. ".txt"
+Group.homePath = "BloxHome_" .. UID .. ".txt"   -- remembers which slot this account used last time
 
 local function lockPath(n) return "Lock_" .. n .. ".txt" end
 function Group.readLock(n)
@@ -396,6 +441,8 @@ function Group.readLock(n)
 end
 function Group.writeLock(n, seq, ts) FS.write(lockPath(n), UID .. "|" .. Group.token .. "|" .. seq .. "|" .. (ts or os.time())) end
 
+-- Id used before the lock is resolved. WHY: v19 blocked the whole boot (~12s+) on the lock; now only
+-- NEW sessions wait for it, and a session started on a provisional id is migrated when the real slot is known.
 function Group.currentId()
     if Group.id then return Group.id end
     local home = tonumber(FS.read(Group.homePath))
@@ -405,6 +452,7 @@ function Group.currentId()
 end
 function Group.whenReady(fn) if Group.ready then Task.spawn("group-waiter", fn) else Group.waiters[#Group.waiters + 1] = fn end end
 
+-- A slot may be overwritten only if it is free, ours, or still exactly the dead lock we observed during the probe.
 local function claimable(n, dead)
     local L = Group.readLock(n)
     if not L or L.token == Group.token then return true end
@@ -412,14 +460,16 @@ local function claimable(n, dead)
     return os.time() - L.ts > CFG.LOCK_STALE
 end
 local function tryClaim(n, dead)
+    -- WHY re-check right before writing: during PROBE_WAIT another instance may have claimed this slot, and v20
+    -- overwrote it blindly. The jitter keeps two instances that both passed the check from writing in lockstep.
     if not claimable(n, dead) then return false end
     task.wait(math.random() * 0.4)
     if not claimable(n, dead) then return false end
     Group.writeLock(n, 0)
-    task.wait(1 + math.random())
+    task.wait(1 + math.random())        -- give a racing instance time to overwrite us
     local L = Group.readLock(n)
     if L and L.token == Group.token then
-        task.wait(1)
+        task.wait(1)                    -- second verification narrows the check-then-act race window
         L = Group.readLock(n)
         if L and L.token == Group.token then return true end
     end
@@ -438,7 +488,9 @@ function Group.pickSlot()
         local L = Group.readLock(n)
         if (not L) or now - L.ts > CFG.LOCK_STALE then free[#free + 1] = n else fresh[#fresh + 1] = { n = n, seq = L.seq, token = L.token } end
     end
+    -- Fast path: our home slot is free, claim it without the probe delay.
     if home and free[1] == home and tryClaim(home) then return home, true end
+    -- Probe: a "fresh" lock whose seq does not advance belongs to a dead process (the previous account of this tab).
     local dead = {}
     if #fresh > 0 then
         task.wait(CFG.PROBE_WAIT)
@@ -463,6 +515,7 @@ function Group.acquire()
     Task.spawn("group-acquire", function()
         local oldId = Group.id
         local okp, n, ok = pcall(Group.pickSlot)
+        -- WHY pcall + flag reset: a crash inside pickSlot used to leave `acquiring` set forever and block every later attempt.
         if not okp then Log.add("E", "slot selection crashed: " .. tostring(n)) n, ok = nil, false end
         Group.acquiring = false
         if ok then
@@ -471,7 +524,7 @@ function Group.acquire()
             FS.write(Group.homePath, tostring(n))
         else
             Group.lockOk = false
-            if not Group.id then Group.num, Group.id = 1, "Group1" end
+            if not Group.id then Group.num, Group.id = 1, "Group1" end   -- fallback id; rotation learning is disabled without a lock
             Group.attempts = (Group.attempts or 0) + 1
         end
         Group.retryAt = os.time() + math.min(CFG.LOCK_RETRY_MAX, 15 * 2 ^ math.min(Group.attempts or 0, 5))
@@ -486,6 +539,8 @@ function Group.acquire()
     end)
 end
 
+-- Keeps the lock fresh and recovers it. WHY: v20 returned early when lockOk was false, so a single failed first
+-- attempt meant NO LOCK until the process died; now it retries with backoff and the session state migrates on success.
 function Group.refresh()
     if not Group.ready or Group.acquiring then return end
     if not Group.lockOk then
@@ -505,7 +560,7 @@ function Group.refresh()
     end
 end
 
-function Group.release()
+function Group.release() -- mark our lock stale (ts = 0) so the slot can be reused immediately
     if Group.ready and Group.lockOk and Group.num then
         local L = Group.readLock(Group.num)
         if L and L.token == Group.token then Group.writeLock(Group.num, Group.seq, 0) end
@@ -513,16 +568,16 @@ function Group.release()
 end
 
 ----------------------------------------------------------------
--- 5. STATE STORE
+-- 5. STATE STORE (per account, survives crash / reload)
 ----------------------------------------------------------------
 Store.path = "BloxState_" .. UID .. ".json"
-Store.data = { lastRoll = 0, bootCount = 0, rolls = 0, highTier = 0, codes = {} }   -- codes: per-account redeem results
+Store.data = { lastRoll = 0, bootCount = 0, rolls = 0, highTier = 0 }
 Store.dirty = false
 function Store.set(k, v) Store.data[k] = v Store.dirty = true end
 function Store.load()
     local d = FS.readJSON(Store.path)
     if d then for k, v in pairs(Store.data) do if type(d[k]) == type(v) then Store.data[k] = d[k] end end end
-    if Store.data.lastRoll == 0 then
+    if Store.data.lastRoll == 0 then -- migrate the v19 "GachaLast_<Group>_<UID>.txt" files
         local best = 0
         for n = 0, CFG.MAX_GROUPS do
             local p = (n == 0) and ("GachaLast_" .. UID .. ".txt") or ("GachaLast_Group" .. n .. "_" .. UID .. ".txt")
@@ -541,9 +596,9 @@ function Store.save(force)
 end
 
 ----------------------------------------------------------------
--- 6. ROTATION + SESSION
+-- 6. ROTATION (adaptive timer) + SESSION (SessionEnd file + winterswap signal)
 ----------------------------------------------------------------
-Rot.id = nil
+Rot.id = nil   -- group id fixed by Sess.start for the whole call, so one operation never mixes two ids
 function Rot.path() return "RotationState_" .. (Rot.id or Group.currentId()) .. ".txt" end
 function Rot.accPath() return "RotAcc_" .. (Rot.id or Group.currentId()) .. "_" .. UID .. ".txt" end
 function Rot.load()
@@ -556,16 +611,21 @@ end
 function Rot.save(st) FS.writeJSON(Rot.path(), st) end
 function Rot.markExit() local st = Rot.load() st.exit, st.exit_by = os.time(), LP.Name Rot.save(st) end
 
+-- Returns the session length (seconds) to use for a NEW session.
+-- Signal: when our turn comes, is the gacha cooldown already over? If not (R > 0) the rotation is too short.
 function Rot.learn(now)
     local st = Rot.load()
     local accStart = tonumber(FS.read(Rot.accPath()))
-    local P = accStart and (now - accStart) or nil
+    local P = accStart and (now - accStart) or nil              -- this account's rotation period
     local gap = st.exit > 0 and (now - st.exit) or nil
     if gap and st.exit_by ~= LP.Name and gap > 0 and gap < 900 then
-        st.oh = math.floor(0.8 * st.oh + 0.2 * gap)
+        st.oh = math.floor(0.8 * st.oh + 0.2 * gap)              -- learn the account-switch overhead
     end
+    -- WHY Group.lockOk: without a lock the state files may be shared with an unknown tab; learning from them would corrupt the timer.
     if P and Store.data.lastRoll > 0 and P >= CFG.MIN_VALID_P and Group.lockOk then
         st.n = st.n + 1
+        -- WHY bootstrap: on a cold start there is no history, so the first cycles use bigger steps and skip the
+        -- "one adjustment per rotation" guard; afterwards the timer moves slowly again to avoid oscillation.
         local boot = st.n <= CFG.BOOTSTRAP_CYCLES
         local alive = clamp(math.floor(P / (st.t + st.oh) + 0.5), 1, CFG.MAX_GROUPS)
         local epoch = alive * (st.t + st.oh)
@@ -575,6 +635,8 @@ function Rot.learn(now)
         if R > 0 then st.bad = st.bad + 1 else st.bad = 0 end
         if R > 0 then
             if st.bad >= CFG.ROT_BAD_LIMIT and st.t < CFG.SESSION_MAX then
+                -- Fallback: small steps did not converge. Solve for the length that satisfies the cooldown directly
+                -- (alive * (t + overhead) >= interval + margin) instead of creeping towards it.
                 local old = st.t
                 st.t = clamp(math.ceil((CFG.ROLL_INTERVAL + CFG.ROLL_MARGIN) / alive) - st.oh, st.t, CFG.SESSION_MAX)
                 st.adj, st.bad = now, 0
@@ -608,13 +670,17 @@ Sess.active, Sess.endAt, Sess.startedAt, Sess.signaledAt, Sess.rejoinTried = fal
 Sess.monoEnd, Sess.fileId, Sess.state, Sess.acked, Sess.alerted, Sess.signalFails = math.huge, nil, "idle", false, false, 0
 function Sess.filePath(id) return "SessionEnd_" .. (id or Group.currentId()) .. "_" .. UID .. ".txt" end
 function Sess.signalPath() return LP.Name .. "_winterswap.json" end
-Sess.SIGNAL_BODY = '{"status":"done"}'
+Sess.SIGNAL_BODY = '{"status":"done"}'            -- exact content the scheduler expects
 
+-- A usable end time is a plausible Unix timestamp that is not further ahead than any session may last.
 local function validEnd(t, now) return t ~= nil and t > 1000000000 and t <= now + CFG.SESSION_MAX + 60 end
 
+-- `id` is chosen ONCE by the caller and used for every file name in that call, so a lock resolving halfway
+-- through can no longer split one operation across two group ids.
 function Sess.findExisting(id, now)
     local t = tonumber(FS.read(Sess.filePath(id)))
     if t then return t, id end
+    -- The account may have been given a different group number than last time: the old file is still valid.
     local bestT, bestId
     for n = 1, CFG.MAX_GROUPS do
         local gid = "Group" .. n
@@ -624,6 +690,8 @@ function Sess.findExisting(id, now)
     return bestT, bestId
 end
 
+-- Moves the session file to the final group id. Runs from the Group hook for promptness AND from Sess.guard
+-- (reconcile) as a catch-up, because the hook can fire before Sess.start has recorded the session (v20 race).
 function Sess.migrate()
     if not Sess.active or not Sess.fileId or not Group.id or Sess.fileId == Group.id then return end
     local body = tostring(Sess.endAt)
@@ -635,7 +703,7 @@ function Sess.migrate()
     end
 end
 
-function Sess.resetCounters()
+function Sess.resetCounters() -- WHY: v20 kept these as loose locals that survived Stop/Start; now one place resets all
     Farm.reset() Sea.reset() Gacha.resetSession()
     Dead.reason, Dead.noCharSince = nil, nil
     Sess.signaledAt, Sess.rejoinTried, Sess.acked, Sess.alerted, Sess.signalFails = nil, false, false, false, 0
@@ -647,6 +715,8 @@ function Sess.start()
     local id = Group.currentId()
     Rot.id = id
     local endAt, foundId = Sess.findExisting(id, now)
+    -- WHY: v20 trusted any timestamp. A far-future value (clock jump, corrupted file, bigger old SESSION_MAX) meant the
+    -- session never expired and the scheduler never got its signal.
     if endAt and not validEnd(endAt, now) and endAt > now then
         Log.add("W", "session file end time is implausible (" .. math.floor(endAt - now) .. "s ahead), starting a new session")
         endAt = nil
@@ -658,13 +728,13 @@ function Sess.start()
     end
     if fresh then
         endAt = now + Rot.learn(now)
-        FS.delete(Sess.signalPath())
+        FS.delete(Sess.signalPath())            -- drop a stale signal from the previous session of this account
         Log.add("I", "new session, " .. math.floor((endAt - now) / 60) .. " min")
     end
     if fresh or (foundId and foundId ~= id) then
         local body = tostring(endAt)
         FS.write(Sess.filePath(id), body)
-        if FS.read(Sess.filePath(id)) ~= body then
+        if FS.read(Sess.filePath(id)) ~= body then   -- the in-memory deadline still works, but the scheduler cannot see it
             Log.add("E", "session file could not be written")
             WH.send("report", "Session file write failed", "Account " .. LP.Name .. " cannot write " .. Sess.filePath(id), 15158332, 3)
         end
@@ -672,12 +742,15 @@ function Sess.start()
     end
     Sess.resetCounters()
     Sess.endAt, Sess.startedAt, Sess.active, Sess.fileId = endAt, now, true, id
+    -- Monotonic deadline next to the wall-clock one: if the device clock jumps backwards the session still ends.
     Sess.monoEnd = os.clock() + math.max(0, endAt - now)
     Sess.state = "active"
     UI.showButton(false)
 end
 function Sess.stop() Sess.active = false Sess.state = "stopped" UI.showButton(true) UI.status("Stopped manually") end
 
+-- Writes the signal and reads it back. WHY: v20 set signaledAt after an unchecked write, so a failed write left the
+-- guard convinced the scheduler had been told and it never tried again.
 function Sess.writeSignal()
     for _ = 1, CFG.SIGNAL_WRITE_TRIES do
         FS.write(Sess.signalPath(), Sess.SIGNAL_BODY)
@@ -694,7 +767,7 @@ function Sess.signal(reason)
         if Sess.signalFails == 3 then
             WH.send("report", "Signal write failing", "Account " .. LP.Name .. " cannot write " .. Sess.signalPath(), 15158332, 3)
         end
-        return
+        return   -- signaledAt stays nil, so the guard retries on its next tick
     end
     Sess.signaledAt, Sess.state = os.time(), "signaled"
     Rot.markExit()
@@ -702,14 +775,18 @@ function Sess.signal(reason)
     UI.status("Done (" .. reason .. "), waiting for account switch")
 end
 
+-- Independent of the roll/farm services: file I/O only, so an HTTP stall elsewhere can never delay the signal.
 function Sess.guard()
     if not Sess.active then return 3 end
-    Sess.migrate()
+    Sess.migrate()                                         -- catch-up for a group id that resolved after the session started
     local now = os.time()
     if not Sess.signaledAt then
         if Dead.reason then Sess.signal("dead: " .. Dead.reason)
         elseif now >= Sess.endAt or os.clock() >= Sess.monoEnd then Sess.signal("timeout") end
     else
+        -- WHY no re-signalling: a rewrite adds no information (the body has no timestamp) and races with the scheduler.
+        -- If it consumes the file between our exists-check and the write, our write becomes a SECOND "done" event and
+        -- the scheduler would skip an account. We only track whether the file was consumed and alert if it never is.
         if not Sess.acked then
             if not FS.exists(Sess.signalPath()) then
                 Sess.acked = true
@@ -720,6 +797,7 @@ function Sess.guard()
                 WH.send("report", "Signal not consumed", "Account " .. LP.Name .. ": the scheduler has not picked up the session-end signal", 15158332, 3)
             end
         end
+        -- Auto-recovery for a dead session the scheduler did not rotate away from (and has not acknowledged).
         if Dead.reason and CFG.AUTO_REJOIN and not Sess.rejoinTried and not Sess.acked and now - Sess.signaledAt >= CFG.REJOIN_AFTER then
             Sess.rejoinTried = true
             Log.add("W", "still alive after dead-session signal, trying to rejoin")
@@ -730,7 +808,7 @@ function Sess.guard()
 end
 
 ----------------------------------------------------------------
--- 7. DEAD-SESSION
+-- 7. DEAD-SESSION DETECTION
 ----------------------------------------------------------------
 Dead.reason, Dead.noCharSince = nil, nil
 function Dead.mark(r)
@@ -750,10 +828,11 @@ function Dead.watch()
 end
 
 ----------------------------------------------------------------
--- 8. VXEZE LOADER
+-- 8. VXEZE LOADER (level-based config, retry with exponential backoff)
 ----------------------------------------------------------------
 local CONFLICT_KEYWORDS = { "hop", "rejoin", "load script", "webhook", "spam join", "store fruit", "reset character", "white screen", "black screen" }
 local function words(s) return " " .. (string.lower(tostring(s)):gsub("[^%w]+", " ")) .. " " end
+-- WHY word match: v19 used a plain substring test, so "hop" also disabled any key containing "Shop".
 local function hasWord(key, kw) return string.find(words(key), words(kw), 1, true) ~= nil end
 
 function Vx.sanitize(cfg)
@@ -768,201 +847,11 @@ function Vx.sanitize(cfg)
     if type(cfg["Webhook"]) == "table" then cfg["Webhook"]["Enable"] = false end
     return n
 end
+-- WHY explicit list: v19 turned EVERY boolean key containing "noti" off, which also flipped filter options such as
+-- "Notify Event Only Current Sea" from true to false (= more notifications, the opposite of the goal).
 function Vx.applyOverrides(cfg)
     cfg["Start Farm"], cfg["Remove Notifications"] = true, true
-    cfg["Auto Load Script"] = false
     for _, k in ipairs(CFG.NOTI_DISABLE_KEYS) do if type(cfg[k]) == "boolean" then cfg[k] = false end end
-end
-
--- v22: nested-path helpers (MainItem.GodHuman lives one level down, the v21 snapshot only covered top-level keys)
-local function pathGet(root, path)
-    local t = root
-    for i = 1, #path - 1 do
-        if type(t) ~= "table" then return nil end
-        t = t[path[i]]
-    end
-    if type(t) ~= "table" then return nil end
-    return t[path[#path]]
-end
-local function pathSet(root, path, value)
-    local t = root
-    for i = 1, #path - 1 do
-        if type(t) ~= "table" then return false end
-        t = t[path[i]]
-    end
-    if type(t) ~= "table" then return false end
-    t[path[#path]] = value
-    return true
-end
-
--- Force every boolean key whose name contains one of `patterns` to false, at any depth. Appends changed paths to `out`.
-function Vx.forceOffDeep(tbl, patterns, prefix, out, depth)
-    out, prefix, depth = out or {}, prefix or "", depth or 0
-    if depth > 4 or type(tbl) ~= "table" then return out end
-    for k, v in pairs(tbl) do
-        if type(v) == "table" then
-            Vx.forceOffDeep(v, patterns, prefix .. tostring(k) .. ".", out, depth + 1)
-        elseif v == true and type(k) == "string" then
-            local name = string.lower(k)
-            for _, p in ipairs(patterns) do
-                if string.find(name, p, 1, true) then tbl[k] = false out[#out + 1] = prefix .. k break end
-            end
-        end
-    end
-    return out
-end
-
--- Absolute forced values, evaluated once per boot from the account level.
-Vx.forced = {}
-function Vx.buildForced(lv)
-    local f = { { { "Auto Load Script" }, false } }
-    if lv < CFG.GODHUMAN_OFF_BELOW then
-        f[#f + 1] = { { "MainItem", "GodHuman" }, false }
-        f[#f + 1] = { { "Auto God Human" }, false }
-    end
-    Vx.forced = f
-end
-
--- Apply forced values + observation kill-switch + protected top-level keys to ONE config table.
-function Vx.enforceOne(cfg)
-    local changed = {}
-    for _, f in ipairs(Vx.forced) do
-        local cur = pathGet(cfg, f[1])
-        if cur ~= nil and cur ~= f[2] and pathSet(cfg, f[1], f[2]) then changed[#changed + 1] = table.concat(f[1], ".") end
-    end
-    Vx.forceOffDeep(cfg, CFG.FORCE_OFF_PATTERNS, "", changed)
-    if Vx.snap then
-        for _, k in ipairs(Vx.PROTECT) do
-            if Vx.snap[k] ~= nil and cfg[k] ~= Vx.snap[k] then cfg[k] = Vx.snap[k] changed[#changed + 1] = k end
-        end
-    end
-    return changed
-end
-
--- The hub may keep its own copy of the config (getgenv().<something>.Config). Find config-shaped tables so the guard
--- covers them too. Scanned at most every 30s, budgeted, and every iteration is pcall-protected.
-Vx.copiesAt, Vx.copiesCache = 0, {}
-function Vx.copies()
-    if os.time() - Vx.copiesAt < 30 then return Vx.copiesCache end
-    Vx.copiesAt = os.time()
-    local main = type(env.Config) == "table" and env.Config or nil
-    local out, seen, budget = {}, {}, 20000
-    if main then seen[main] = true end
-    local function consider(t)
-        if type(t) == "table" and not seen[t] and rawget(t, "Select Method Farm") ~= nil then
-            seen[t] = true
-            out[#out + 1] = t
-            return true
-        end
-        return false
-    end
-    local function scanInner(t)
-        pcall(function()
-            for _, v2 in next, t do
-                budget = budget - 1
-                if budget <= 0 then return end
-                consider(v2)
-            end
-        end)
-    end
-    for _, root in ipairs({ env, _G }) do
-        pcall(function()
-            for _, v in next, root do
-                budget = budget - 1
-                if budget <= 0 then return end
-                if type(v) == "table" and v ~= env and v ~= _G and not seen[v] then
-                    if not consider(v) then scanInner(v) end
-                end
-            end
-        end)
-    end
-    Vx.copiesCache = out
-    return out
-end
-
-Vx.flipSeen = {}
-function Vx.enforceAll()
-    local total = 0
-    local targets = {}
-    if type(env.Config) == "table" then targets[1] = { env.Config, "env.Config" } end
-    for i, t in ipairs(Vx.copies()) do targets[#targets + 1] = { t, "copy#" .. i } end
-    for _, tg in ipairs(targets) do
-        local ok, changed = pcall(Vx.enforceOne, tg[1])
-        if ok and #changed > 0 then
-            total = total + #changed
-            local fresh, now = {}, os.time()
-            for _, p in ipairs(changed) do
-                local id = tg[2] .. ":" .. p
-                if (Vx.flipSeen[id] or 0) + 60 <= now then Vx.flipSeen[id] = now fresh[#fresh + 1] = p end
-            end
-            if #fresh > 0 then Log.add("W", "config guard (" .. tg[2] .. ") re-forced: " .. table.concat(fresh, ", ", 1, math.min(#fresh, 10))) end
-        end
-    end
-    return total
-end
-
--- OPTIONAL (CFG.KEN_RUNTIME_OFF): ASSUMED signature CommE:FireServer("Ken", false). Fired twice per character.
-function Vx.kenTick()
-    if not CFG.KEN_RUNTIME_OFF or not hasHRP() then return end
-    local ch = LP.Character
-    if ch ~= Vx.kenChar then Vx.kenChar, Vx.kenDue = ch, { os.clock() + 10, os.clock() + 45 } end
-    local due = Vx.kenDue
-    if due and due[1] and os.clock() >= due[1] then
-        table.remove(due, 1)
-        local ce = Remotes and Remotes:FindFirstChild("CommE")
-        if ce and ce:IsA("RemoteEvent") then
-            pcall(function() ce:FireServer("Ken", false) end)
-            Log.add("I", "ken: sent CommE Ken=false (assumed signature)")
-        end
-    end
-end
-
-function Vx.buildConfig(lv)
-    local cfg = GetVxezeLevelConfig()
-    if lv < CFG.LEVEL_VXEZE_MIN then return cfg, "leveling" end
-    for k, v in pairs(BELI_OVERRIDES) do cfg[k] = v end
-    if CFG.BELI_KEEP_LEGACY_UI then for k, v in pairs(BELI_LEGACY_UI) do cfg[k] = v end end
-    return cfg, "beli"
-end
-
-Vx.PROTECT = { "Auto Load Script", "Select Method Farm" }
-function Vx.snapshot(cfg)
-    local s = {}
-    for k, v in pairs(cfg) do if type(v) ~= "table" then s[k] = v end end
-    Vx.snap = s
-end
-function Vx.reassert() return Vx.enforceAll() end
-function Vx.drift()
-    local cfg = type(env.Config) == "table" and env.Config or nil
-    if not (cfg and Vx.snap) then return end
-    local diffs = {}
-    for k, v in pairs(Vx.snap) do
-        if k ~= Farm.KEY and cfg[k] ~= v then diffs[#diffs + 1] = k .. ": " .. tostring(v) .. " -> " .. tostring(cfg[k]) end
-    end
-    table.sort(diffs)
-    if #diffs > 0 then
-        Log.add("W", "hub changed " .. #diffs .. " config key(s) after load: " .. table.concat(diffs, "; ", 1, math.min(#diffs, 12)))
-        FS.write("BloxConfigDrift_" .. UID .. ".txt", table.concat(diffs, "\n"))
-        local fixed = Vx.reassert()
-        if fixed > 0 then Log.add("W", "re-asserted " .. fixed .. " protected key(s)") end
-    else
-        Log.add("I", "config check: the hub left our config untouched")
-    end
-end
-function Vx.driftTick()
-    if not (Vx.loaded and Vx.loadedAt and Vx.snap) then return 5 end
-    local age = os.time() - Vx.loadedAt
-    Vx.enforceAll()          -- v22: runs every few seconds, not just at 45s / 300s
-    Vx.kenTick()
-    Vx.driftDone = Vx.driftDone or 0
-    if Vx.driftDone == 0 and age >= CFG.IDLE.DRIFT_AFTER then
-        Vx.driftDone = 1
-        Vx.drift()
-    elseif Vx.driftDone == 1 and age >= 300 then
-        Vx.driftDone = 2
-        Vx.drift()
-    end
-    return age < CFG.FORCE_GUARD_FAST_FOR and CFG.FORCE_GUARD_FAST or CFG.FORCE_GUARD_SLOW
 end
 
 Vx.mode, Vx.level, Vx.loaded, Vx.failed, Vx.running, Vx.attempts, Vx.reloads = nil, nil, false, false, false, 0, 0
@@ -975,6 +864,7 @@ function Vx.readLevel()
     return ok and v or nil
 end
 function Vx.load()
+    -- WHY: running the hub on top of a live copy duplicates its loops/UI (same failure mode as the old "Auto Load Script" idle bug).
     if env.BloxVxJob == game.JobId and Farm.toggle() then
         Vx.loaded, Vx.loadedAt = true, os.time()
         Log.add("W", "hub already running in this server, not loading again")
@@ -985,7 +875,7 @@ function Vx.load()
         if not S.alive then return false end
         Vx.attempts, Vx.running = attempt, true
         local ok, err = pcall(function()
-            local fn, cerr = loadstring(game:HttpGet(CFG.VXEZE_URL))
+            local fn, cerr = loadstring(game:HttpGet(Vx.url()))
             if not fn then error(cerr or "compile failed") end
             fn()
         end)
@@ -996,6 +886,7 @@ function Vx.load()
             return true
         end
         Log.add("W", "Vxeze load failed (attempt " .. attempt .. "): " .. tostring(err))
+        -- The hub may have partly run before erroring; loading it again would duplicate its UI and loops.
         if Farm.toggle() then
             Vx.loaded, Vx.loadedAt = true, os.time()
             Log.add("W", "hub UI is already present, not retrying")
@@ -1009,27 +900,68 @@ function Vx.load()
     WH.send("report", "Vxeze load failed", "Account " .. LP.Name .. " could not load the hub", 16711680, 3)
     return false
 end
+function Vx.url() return Vx.hub == "kaitun" and CFG.KAITUN_URL or CFG.VXEZE_URL end
+-- Keys that must never be on. WHY an explicit invariant: the presets contain "Auto Load Script" = true and the hub
+-- may re-run itself with it, duplicating the farm loops (idle character). sanitize() already clears it by keyword;
+-- this list makes the guarantee independent of that keyword list.
+Vx.FORCE_OFF = { "Auto Load Script", "Hidden Hop Dead Hour" }
+function Vx.forceOff(cfg) for _, k in ipairs(Vx.FORCE_OFF) do if cfg[k] ~= nil then cfg[k] = false end end end
+
+-- Kaitun: only Beli / Mastery / Godhuman. Every other quest, race, hop, shop and webhook switch is forced off.
+function Vx.applyKaitun(cfg)
+    local bf = cfg["Blox Fruits"]
+    bf["Select Team"] = CFG.PREFERRED_TEAM
+    local function off(tbl) for k, v in pairs(tbl) do if v == true then tbl[k] = false elseif type(v) == "table" then off(v) end end end
+    for _, k in ipairs({ "Get Rare Items", "Get Race", "Farm Fragments", "Select Hop", "Sniper Fruit Shop", "Secret Quest", "Webhook" }) do
+        if type(bf[k]) == "table" then off(bf[k]) end
+    end
+    bf["Auto Awaken Fruit"], bf["Summon Rip Indra"] = false, false
+    local gi = bf["Get Items"]
+    if type(gi) == "table" then
+        for k in pairs(gi) do gi[k] = false end
+        gi["Godhuman"] = true
+        if gi["Superhuman"] ~= nil then gi["Superhuman"] = true end
+    end
+    if type(bf["Farm Mastery"]) == "table" then bf["Farm Mastery"]["Enabled"] = CFG.KAITUN.MASTERY and true or false end
+end
+
+-- Writes what the hub will actually receive, so "which key is on" is evidence instead of a guess.
+function Vx.dumpConfig(cfg)
+    if not FS.ok() then return end
+    local out = { "hub=" .. tostring(Vx.hub) .. " mode=" .. tostring(Vx.mode) .. " level=" .. tostring(Vx.level) }
+    local function walk(tbl, prefix)
+        for k, v in pairs(tbl) do
+            if type(v) == "table" then walk(v, prefix .. tostring(k) .. ".")
+            elseif v == true or type(v) == "string" or type(v) == "number" then out[#out + 1] = prefix .. tostring(k) .. " = " .. tostring(v) end
+        end
+    end
+    walk(cfg, "")
+    table.sort(out)
+    FS.write("VxConfig_" .. UID .. ".txt", table.concat(out, "\n"))
+end
+
 function Vx.boot()
     Task.spawn("vxeze-boot", function()
         local lv = Vx.readLevel()
-        while not lv and S.alive do task.wait(3) lv = Vx.readLevel() end
+        while not lv and S.alive do task.wait(3) lv = Vx.readLevel() end   -- Data.Level may not exist yet
         if not S.alive then return end
-        local cfg, mode = Vx.buildConfig(lv)
-        local removed = Vx.sanitize(cfg)
-        Vx.applyOverrides(cfg)
-        Vx.buildForced(lv)
-        local forcedNow = Vx.enforceOne(cfg)
-        Vx.snapshot(cfg)
+        Vx.hub = CFG.HUB
+        local cfg, mode, removed = nil, nil, 0
+        if Vx.hub == "kaitun" then
+            cfg, mode = GetKaitunConfig(), "kaitun"
+            Vx.applyKaitun(cfg)
+            env.Premium, env.FpsBoost, env.Key = false, true, env.Key or ""
+        else
+            if lv >= CFG.LEVEL_VXEZE_MIN then cfg, mode = GetVxezeConfig(), "beli" else cfg, mode = GetVxezeLevelConfig(), "leveling" end
+            removed = Vx.sanitize(cfg)
+            Vx.applyOverrides(cfg)
+            Vx.forceOff(cfg)
+        end
         Vx.mode, Vx.level = mode, lv
         env.Config = cfg
-        local nkeys = 0
-        for _ in pairs(cfg) do nkeys = nkeys + 1 end
-        Log.add("I", string.format("config: method=%s autoLoad=%s startFarm=%s keys=%d", tostring(cfg["Select Method Farm"]), tostring(cfg["Auto Load Script"]), tostring(cfg["Start Farm"]), nkeys))
-        Log.add("I", string.format("config guard: %d key(s) forced at build [%s] | MainItem.GodHuman=%s | Auto Turn On Observation=%s",
-            #forcedNow, table.concat(forcedNow, ", ", 1, math.min(#forcedNow, 8)), tostring(pathGet(cfg, { "MainItem", "GodHuman" })), tostring(cfg["Auto Turn On Observation"])))
-        FS.writeJSON("BloxConfigDump_" .. UID .. ".json", cfg)
         env.BloxSea = { sea = ({ [2753915549] = 1, [4442272183] = 2, [7449423635] = 3 })[game.PlaceId], level = lv, mode = mode }
-        Log.add("I", "level " .. lv .. " -> mode " .. mode .. " (" .. removed .. " conflicting features disabled)")
+        Vx.dumpConfig(cfg)
+        Log.add("I", "hub " .. Vx.hub .. ", level " .. lv .. " -> mode " .. mode .. " (" .. removed .. " conflicting features disabled), config dumped to VxConfig_" .. UID .. ".txt")
         Noti.installHook()
         Vx.load()
     end)
@@ -1043,6 +975,9 @@ function Noti.match(text)
     for _, p in ipairs(CFG.NOTI_PATTERNS) do if string.find(t, p, 1, true) then return true end end
     return false
 end
+-- The hook is installed once per process and asks env.BloxNotiRule, which each new instance replaces.
+-- WHY: v19 hooked __namecall (runs on EVERY method call in the game) and stacked a new hook on each re-execution.
+-- Hooking only StarterGui.SetCore costs nothing unless a notification is actually sent.
 function Noti.installHook()
     env.BloxNotiRule = function(name, data)
         if name == "SendNotification" then
@@ -1067,7 +1002,9 @@ function Noti.installHook()
     if ok then env.BloxNotiHooked = true else Log.add("W", "notification hook failed: " .. tostring(err)) end
 end
 
-Noti.SKIP_GUI = { RobloxGui = true, PlayerList = true, Chat = true, TopBarApp = true, BubbleChat = true, PurchasePrompt = true, ThemeProvider = true, ControlGui = true, TouchGui = true, Main = true, BloxFactoryUI = true, RobloxNetworkPauseNotification = true, DevConsoleMaster = true, ScreenshotHud = true }
+Noti.SKIP_GUI = { RobloxGui = true, PlayerList = true, Chat = true, TopBarApp = true, BubbleChat = true, PurchasePrompt = true,
+    ThemeProvider = true, ControlGui = true, TouchGui = true, Main = true, BloxFactoryUI = true,
+    RobloxNetworkPauseNotification = true, DevConsoleMaster = true, ScreenshotHud = true }
 
 function Noti.check(d)
     if not d:IsA("GuiObject") or d:IsA("GuiButton") or not d.Visible then return end
@@ -1080,12 +1017,14 @@ function Noti.check(d)
         if string.sub(t, 1, 5) == "kill " and (string.find(t, "[", 1, true) or string.sub(t, -3) == "...") then d.Visible = false end
     end
 end
+-- WHY event-driven: v19 walked GetDescendants() of every ScreenGui every 3 seconds. Now each new GUI element
+-- is checked exactly once when it is created (plus one initial pass, yielding so the screen never freezes).
 function Noti.attach(g)
     if not g:IsA("ScreenGui") or Noti.SKIP_GUI[g.Name] then return end
     local ok, c = pcall(function()
         return g.DescendantAdded:Connect(function(d)
             Noti.check(d)
-            if d:IsA("TextLabel") then task.delay(0.2, function() pcall(Noti.check, d) end) end
+            if d:IsA("TextLabel") then task.delay(0.2, function() pcall(Noti.check, d) end) end -- text is often set after creation
         end)
     end)
     if ok then S.conns[#S.conns + 1] = c end
@@ -1108,108 +1047,6 @@ function Noti.boot()
         local ok, c = pcall(function() return root.ChildAdded:Connect(Noti.attach) end)
         if ok then S.conns[#S.conns + 1] = c end
     end
-end
-
-----------------------------------------------------------------
--- 9b. DAMAGE NUMBERS (v22): structural detection instead of name matching
---   WHY: v21 matched names ("damage"/"hit"/...). The game's names are unknown, so numbers kept coming. Here a BillboardGui /
---   SurfaceGui is removed when (a) its name says damage/dmg OR (b) it contains a TextLabel whose text is purely numeric
---   (health bars have "/", name tags have letters). BloxDamageProbe_<UID>.txt records what was actually created so the
---   rules can be corrected from real data.
-----------------------------------------------------------------
-local Dmg = { killed = 0, trash = {}, probeLines = {}, probeUntil = 0, probed = false, dead = setmetatable({}, { __mode = "k" }) }
-
-local function isNumericText(t)
-    if type(t) ~= "string" or t == "" or #t > 14 then return false end
-    return string.find(t, "^[%+%-]?[%d,%.]+[kKmMbB]?!?$") ~= nil
-end
-local function dmgNameHit(name)
-    local n = string.lower(tostring(name))
-    for _, p in ipairs(CFG.DMG.NAMES) do if string.find(n, p, 1, true) then return true end end
-    return false
-end
-function Dmg.note(d, why)
-    if os.clock() > Dmg.probeUntil or #Dmg.probeLines >= CFG.DMG.PROBE_MAX then return end
-    local chain, cur = {}, d
-    for _ = 1, 6 do
-        if not cur or cur == game then break end
-        chain[#chain + 1] = cur.ClassName .. ":" .. cur.Name
-        cur = cur.Parent
-    end
-    local txt = (d:IsA("TextLabel") or d:IsA("TextBox")) and d.Text or ""
-    Dmg.probeLines[#Dmg.probeLines + 1] = string.format("%s | text=%q | chain(up)= %s", why, txt, table.concat(chain, " < "))
-end
-function Dmg.kill(gui)
-    if Dmg.dead[gui] then return end
-    Dmg.dead[gui] = true
-    Dmg.killed = Dmg.killed + 1
-    pcall(function() gui.Enabled = false end)     -- stops rendering at once; Destroy is batched in Dmg.tick
-    Dmg.trash[#Dmg.trash + 1] = gui
-end
-function Dmg.inspect(gui)
-    if not S.alive or not gui or not gui.Parent or Dmg.dead[gui] then return end
-    local why
-    if dmgNameHit(gui.Name) then why = "name" end
-    if not why then
-        local n = 0
-        for _, x in ipairs(gui:GetDescendants()) do
-            n = n + 1
-            if n > 30 then break end
-            if x:IsA("TextLabel") and isNumericText(x.Text) then why = "numeric text" break end
-        end
-    end
-    if not why then return end
-    Dmg.note(gui, why)
-    Dmg.kill(gui)
-end
-function Dmg.onAdded(d)
-    local cn = d.ClassName
-    if cn == "BillboardGui" or cn == "SurfaceGui" then
-        task.delay(0.12, Dmg.inspect, d)         -- children / text are often filled in right after parenting
-        task.delay(0.6, Dmg.inspect, d)
-    elseif cn == "TextLabel" and Dmg.probeUntil > 0 and isNumericText(d.Text) then
-        Dmg.note(d, "numeric TextLabel")         -- 2D candidates are only logged, never removed
-    end
-end
--- Disable BillboardGui templates in ReplicatedStorage whose name says damage, so clones start disabled (best effort).
-function Dmg.disableTemplates()
-    local n, found = 0, {}
-    for _, d in ipairs(RS:GetDescendants()) do
-        n = n + 1
-        if n % 500 == 0 then task.wait() end
-        if d:IsA("BillboardGui") and dmgNameHit(d.Name) then
-            pcall(function() d.Enabled = false end)
-            if #found < 5 then found[#found + 1] = d:GetFullName() end
-        end
-    end
-    Log.add("I", "damage: " .. #found .. " template(s) disabled" .. (#found > 0 and (" (" .. table.concat(found, ", ") .. ")") or ""))
-end
-function Dmg.startProbe(secs)
-    Dmg.probeLines, Dmg.probeUntil = {}, os.clock() + (secs or CFG.DMG.PROBE_SECONDS)
-    Log.add("I", "damage probe running for " .. (secs or CFG.DMG.PROBE_SECONDS) .. "s")
-end
-function Dmg.writeProbe()
-    local out = { "killed so far: " .. Dmg.killed, "-- created during the probe window (newest last):" }
-    for _, l in ipairs(Dmg.probeLines) do out[#out + 1] = l end
-    if #Dmg.probeLines == 0 then out[#out + 1] = "(nothing numeric was created: damage numbers are either not GUI based or already removed before the probe)" end
-    FS.write("BloxDamageProbe_" .. UID .. ".txt", table.concat(out, "\n"))
-    Log.add("I", "damage probe written (" .. #Dmg.probeLines .. " line(s), " .. Dmg.killed .. " removed in total)")
-end
-function Dmg.tick()
-    local t = Dmg.trash
-    if #t > 0 then
-        Dmg.trash = {}
-        for _, g in ipairs(t) do pcall(function() g:Destroy() end) end
-    end
-    if CFG.DMG.PROBE_SECONDS > 0 and not Dmg.probed and Sess.active and hasHRP() then
-        Dmg.armAt = Dmg.armAt or (os.clock() + 60)
-        if os.clock() >= Dmg.armAt then Dmg.probed = true Dmg.startProbe() end
-    end
-    if Dmg.probeUntil > 0 and os.clock() > Dmg.probeUntil then
-        Dmg.probeUntil = 0
-        Dmg.writeProbe()
-    end
-    return 1
 end
 
 ----------------------------------------------------------------
@@ -1260,14 +1097,14 @@ end
 -- 11. TEAM SELECTION
 ----------------------------------------------------------------
 Team.NAME = (CFG.PREFERRED_TEAM == "Marines") and "Marines" or "Pirates"
-Team.STEM = (Team.NAME == "Pirates") and "pirate" or "marin"
+Team.STEM = (Team.NAME == "Pirates") and "pirate" or "marin"      -- "marin" also matches the Indonesian "MARIN"
 Team.cached, Team.lastScan, Team.lastTry, Team.fails, Team.doneStreak, Team.bootClock, Team.dumped = nil, 0, 0, 0, 0, os.clock(), false
 
 function Team.ui()
     local main = PG:FindFirstChild("Main")
     local ct = main and main:FindFirstChild("ChooseTeam")
     if not ct and Team.cached and Team.cached.Parent then ct = Team.cached end
-    if not ct and os.clock() - Team.lastScan >= 5 then
+    if not ct and os.clock() - Team.lastScan >= 5 then          -- full-tree search at most every 5 seconds
         Team.lastScan = os.clock()
         ct = PG:FindFirstChild("ChooseTeam", true)
         if not ct then
@@ -1344,6 +1181,8 @@ function Team.try()
     return false
 end
 function Team.tick()
+    -- WHY: v19 kept calling Team.ui() every second for the whole run; once the UI is gone that meant a full
+    -- PlayerGui scan every 5 seconds forever. The service now ends as soon as the team is set and a character exists.
     if Team.done() and hasHRP() then
         Team.doneStreak = Team.doneStreak + 1
         if Team.doneStreak >= 3 then return false end
@@ -1352,7 +1191,7 @@ function Team.tick()
     Team.doneStreak = 0
     local ct = Team.ui()
     local need = (ct and Input.shown(ct)) or (LP.Team == nil and not hasHRP() and os.clock() - Team.bootClock > 20)
-    local cd = math.min(30, 5 * 2 ^ Team.fails)
+    local cd = math.min(30, 5 * 2 ^ Team.fails)               -- 5s, 10s, 20s, 30s between attempts (anti-spam)
     if need and os.clock() - Team.lastTry >= cd then
         Team.lastTry = os.clock()
         local ok, how = Team.try()
@@ -1362,7 +1201,7 @@ function Team.tick()
 end
 
 ----------------------------------------------------------------
--- 12. FARM CONTROL
+-- 12. FARM CONTROL (Vxeze toggle): reconcile desired state vs. actual state
 ----------------------------------------------------------------
 Farm.TEXTS    = { "mulai bertani", "start farming", "start farm" }
 Farm.PATTERNS = { "farm", "bertani" }
@@ -1373,7 +1212,6 @@ function Farm.reset()
     Farm.onTries, Farm.onNext, Farm.warnAt = 0, 0, 0
     Farm.stopTries, Farm.stopNext, Farm.stopped = 0, 0, false
     Farm.scanBackoff, Farm.sw, Farm.row, Farm.seenUI = 5, nil, nil, false
-    Farm.watch, Farm.methodIdx = nil, 0
 end
 Farm.reset()
 
@@ -1412,6 +1250,7 @@ function Farm.roots()
     roots[#roots + 1] = PG
     return roots
 end
+-- Search one ScreenGui for the toggle; yields every 400 objects so the screen never freezes.
 function Farm.scanGui(g)
     local n = 0
     for _, d in ipairs(g:GetDescendants()) do
@@ -1454,6 +1293,7 @@ function Farm.toggle()
         end
     end
 end
+-- ON/OFF: boolean attribute first (cheap), otherwise "accent colour present" (cyan = ON, grey/white = OFF).
 function Farm.isOn(sw, row)
     for _, inst in ipairs({ sw, row }) do
         local ok, attrs = pcall(function() return inst:GetAttributes() end)
@@ -1475,12 +1315,10 @@ function Farm.start()
     if not Team.done() or not hasHRP() then return 3 end
     local sw, row = Farm.toggle()
     if not sw then
-        Farm.scanBackoff = math.min(60, Farm.scanBackoff * 2)
+        Farm.scanBackoff = math.min(60, Farm.scanBackoff * 2)   -- WHY: v19 rescanned every 5s forever when the hub never appeared
         return Farm.scanBackoff
     end
     Farm.scanBackoff = 5
-    local cfgT = type(env.Config) == "table" and env.Config or nil
-    if cfgT and cfgT[Farm.KEY] ~= true then cfgT[Farm.KEY] = true Log.add("W", "Start Farm was false in the config while the UI looked on, re-enabled it") end
     if os.time() < Farm.onNext then return 3 end
     if Farm.isOn(sw, row) then Farm.onTries = 0 Farm.onNext = os.time() + 15 return 5 end
     if Farm.onTries >= CFG.FARM_ON_MAX then
@@ -1498,6 +1336,7 @@ function Farm.start()
     return 5
 end
 
+-- Stop order: config table (instant) -> global flags -> UI toggle, verified by re-reading the toggle.
 function Farm.stopOnce()
     local cfg = type(env.Config) == "table" and env.Config or nil
     local wasOn = cfg ~= nil and cfg[Farm.KEY] == true
@@ -1509,7 +1348,7 @@ function Farm.stopOnce()
     if sw and Farm.isOn(sw, row) then
         Input.click(sw) task.wait(0.8) clicked = true
         if Farm.isOn(sw, row) then Input.vim(sw, "mouse") task.wait(0.8) end
-        if cfg then Farm.cfgOff(cfg) end
+        if cfg then Farm.cfgOff(cfg) end        -- a toggle callback may flip the value back; write false last
     end
     if cfg then task.wait(0.3) if cfg[Farm.KEY] ~= false then cfg[Farm.KEY] = false end end
     if sw and Farm.isOn(sw, row) then
@@ -1538,99 +1377,29 @@ function Farm.stop()
     return 3
 end
 function Farm.tick()
+    if Vx.hub == "kaitun" then return 30 end   -- the hub runs its own farm loop; there is no Vxeze toggle to reconcile
     if not Sess.active or Sess.signaledAt or not Vx.mode then return 5 end
     local left = Sess.endAt - os.time()
     if left <= CFG.FARM_STOP_BEFORE then
         if Farm.stopped then return 10 end
         return Farm.stop()
     end
-    if left <= CFG.FARM_STOP_BEFORE + 30 then return 5 end
+    if left <= CFG.FARM_STOP_BEFORE + 30 then return 5 end    -- do not restart the farm right before the stop window
     return Farm.start()
 end
-
-function Farm.note(msg)
-    Log.add("W", "farm-verify: " .. msg)
-    local ev = Farm.events or {}
-    ev[#ev + 1] = os.date("%H:%M:%S") .. " " .. msg
-    if #ev > 20 then table.remove(ev, 1) end
-    Farm.events = ev
-    FS.write("BloxFarmEvents_" .. UID .. ".txt", table.concat(ev, "\n"))
-end
-function Farm.probe()
-    local ch = LP.Character
-    local hrp = ch and ch:FindFirstChild("HumanoidRootPart")
-    if not hrp then return nil end
-    local d = LP:FindFirstChild("Data")
-    local function val(n)
-        local v = d and d:FindFirstChild(n)
-        return (v and v:IsA("ValueBase")) and tonumber(v.Value) or nil
-    end
-    local p = hrp.Position
-    return { x = p.X, y = p.Y, z = p.Z, beli = val("Beli"), exp = val("Exp"), level = val("Level") }
-end
-function Farm.progressed(a, b, studs)
-    local dx, dy, dz = a.x - b.x, a.y - b.y, a.z - b.z
-    if math.sqrt(dx * dx + dy * dy + dz * dz) >= studs then return true end
-    for _, k in ipairs({ "beli", "exp", "level" }) do
-        if a[k] ~= nil and b[k] ~= nil and a[k] ~= b[k] then return true end
-    end
-    return false
-end
-function Farm.stageFor(idle, I)
-    if idle < I.AFTER then return 0 end
-    return math.min(3, 1 + math.floor((idle - I.AFTER) / I.STAGE_WAIT))
-end
-function Farm.escalate(stage, idle)
-    local I = CFG.IDLE
-    local cfg = type(env.Config) == "table" and env.Config or nil
-    Farm.note(string.format("no progress for %ds, stage %d (mode %s, method %s)", idle, stage, tostring(Vx.mode), tostring(cfg and cfg["Select Method Farm"])))
-    if stage == 1 then
-        local fixed = Vx.reassert()
-        if cfg then cfg[Farm.KEY] = false task.wait(1.5) cfg[Farm.KEY] = true end
-        Farm.note("stage 1 done: Start Farm toggled off/on in the config" .. (fixed > 0 and (", re-asserted " .. fixed .. " key(s)") or ""))
-    elseif stage == 2 then
-        Farm.methodIdx = Farm.methodIdx + 1
-        local m = (I.FALLBACK_METHODS or {})[Farm.methodIdx]
-        if cfg and m then
-            cfg["Select Method Farm"] = m
-            if Vx.snap then Vx.snap["Select Method Farm"] = m end
-            cfg[Farm.KEY] = false task.wait(1.5) cfg[Farm.KEY] = true
-            Farm.note("stage 2 done: Select Method Farm -> " .. tostring(m))
-        else
-            Farm.note("stage 2: no fallback method configured")
-        end
-    else
-        local why = string.format("farm idle %ds in %s mode at level %s despite recovery attempts", idle, tostring(Vx.mode), tostring(Vx.level))
-        Farm.note("stage 3: " .. why)
-        if I.GIVEUP_DEAD then Dead.mark(why) else WH.send("report", "Farm idle", "Account " .. LP.Name .. ": " .. why, 15158332, 3) end
-    end
-end
-function Farm.verify()
-    local I = CFG.IDLE
-    local ready = I.ENABLED and Sess.active and not Sess.signaledAt and Vx.mode and Vx.loaded and Vx.loadedAt and Team.done() and hasHRP() and not Farm.stopped and (Sess.endAt - os.time()) > CFG.FARM_STOP_BEFORE + 30
-    if not ready then Farm.watch = nil return I.CHECK end
-    local cur = Farm.probe()
-    if not cur then return I.CHECK end
-    local now, w = os.time(), Farm.watch
-    if not w or now < Vx.loadedAt + I.GRACE then Farm.watch = { prev = cur, last = now, stage = 0 } return I.CHECK end
-    if Farm.progressed(w.prev, cur, I.MOVE_STUDS) then
-        if w.stage > 0 then Farm.note("progress resumed after stage " .. w.stage) end
-        Farm.watch = { prev = cur, last = now, stage = 0 }
-        return I.CHECK
-    end
-    local idle = now - w.last
-    local want = Farm.stageFor(idle, I)
-    if want > w.stage then w.stage = want Farm.escalate(want, idle) end
-    return I.CHECK
-end
-
+-- Self-healing for the hub: loaded but its UI never appeared -> reload, with exponentially growing waits.
+-- WHY: v20 reloaded exactly once. seenUI is set by Farm.toggle() (Farm.start scans with its own backoff), so this
+-- watcher never scans the GUI tree itself.
 function Farm.hubWatch()
+    if Vx.hub == "kaitun" then return 30 end
     if not Vx.loaded or Farm.seenUI or Vx.failed then Vx.uiDeadline = nil return 15 end
+    -- WHY: the UI is only scanned once a character exists and the team is chosen; counting time before that
+    -- "proves" the hub missing and reloads it on top of a healthy instance (double-load = idle farm).
     if not (Team.done() and hasHRP()) then Vx.uiDeadline = nil return 15 end
     Vx.uiDeadline = Vx.uiDeadline or (os.time() + CFG.VX_UI_TIMEOUT * (2 ^ Vx.reloads))
     if os.time() >= Vx.uiDeadline then
         Vx.uiDeadline = nil
-        if Farm.toggle() then return 15 end
+        if Farm.toggle() then return 15 end   -- last look before reloading: the UI may exist, the scan just never ran
         if Vx.reloads >= CFG.VX_MAX_RELOADS then
             Vx.failed = true
             Log.add("E", "Vxeze UI never appeared after " .. Vx.reloads .. " reload(s), giving up")
@@ -1644,9 +1413,45 @@ function Farm.hubWatch()
     return 15
 end
 
+
+-- 12b. IDLE VERIFIER. A farm toggle that reads ON proves nothing (the preset bug: toggle cyan, character standing still).
+-- Ground truth is movement: if the character covers < 8 studs for IDLE_AFTER seconds, escalate.
+Farm.idle = { last = nil, since = 0, path = 0, stage = 0 }
+function Farm.idleWatch()
+    local I = Farm.idle
+    if not Sess.active or Sess.signaledAt or Farm.stopped or not Vx.mode or not Vx.loaded then I.last = nil return 5 end
+    if Sess.endAt - os.time() <= CFG.FARM_STOP_BEFORE + 30 then return 5 end
+    local c = LP.Character
+    local hrp = c and c:FindFirstChild("HumanoidRootPart")
+    if not hrp or not Team.done() then I.last = nil return 5 end
+    local p = hrp.Position
+    if not I.last then I.last, I.since, I.path = p, os.time(), 0 return 5 end
+    I.path = I.path + (p - I.last).Magnitude
+    I.last = p
+    if I.path >= 8 then I.since, I.path, I.stage = os.time(), 0, 0 return 5 end
+    if os.time() - I.since < CFG.IDLE_AFTER then return 5 end
+    I.since, I.path, I.stage = os.time(), 0, I.stage + 1
+    Log.add("W", "farm looks idle (stage " .. I.stage .. ", hub " .. tostring(Vx.hub) .. ", mode " .. tostring(Vx.mode) .. ")")
+    if Vx.hub == "vxeze" then
+        local sw, row = Farm.toggle()
+        if I.stage == 2 and Vx.mode == "beli" then       -- the beli preset does not move: fall back to the leveling preset
+            local cfg = GetVxezeLevelConfig()
+            Vx.sanitize(cfg) Vx.applyOverrides(cfg) Vx.forceOff(cfg)
+            env.Config, Vx.mode = cfg, "leveling(fallback)"
+            Vx.dumpConfig(cfg)
+            Log.add("W", "idle farm: switched to the leveling preset")
+        end
+        if sw and Farm.isOn(sw, row) then Input.click(sw) task.wait(1.5) Input.click(sw) end   -- off/on cycle
+    end
+    if I.stage == 3 then
+        WH.send("report", "Farm idle", "Account " .. LP.Name .. " has not moved for " .. (3 * CFG.IDLE_AFTER) .. "s (hub " .. tostring(Vx.hub) .. ", mode " .. tostring(Vx.mode) .. ")", 15158332, 3)
+    end
+    return 5
+end
 ----------------------------------------------------------------
 -- 13. GACHA
 ----------------------------------------------------------------
+-- WHY word match: v19 used substring search, so "love" matched "Glove", "east" matched "Beast", "gas" matched "Vegas"...
 local HIGH_NORM = {}
 for _, k in ipairs(HIGH_TIER) do HIGH_NORM[#HIGH_NORM + 1] = words(k) end
 local function splitCamel(s) return (tostring(s):gsub("(%l)(%u)", "%1 %2")) end
@@ -1703,6 +1508,7 @@ end
 function Gacha.resetSession() Gacha.fails, Gacha.retryAt, Gacha.reportedStuck = 0, 0, false end
 Gacha.resetSession()
 
+-- Stores a high-tier fruit in the chest and verifies it: a server-side store replicates as the tool disappearing.
 function Gacha.store(name, tool)
     for attempt = 1, 3 do
         local cf = commF()
@@ -1743,13 +1549,15 @@ function Gacha.roll()
         Store.set("lastRoll", os.time())
         Store.set("rolls", Store.data.rolls + 1)
         Store.save(true)
+        -- WHY: v19 sent a "Zonk/Cooldown" report on EVERY retry (every 45-300s), which floods a shared webhook.
+        -- Now only successful rolls are reported.
         WH.send("report", "Roll Report", "Status: new item received\n" .. beliText, low and 16711680 or 3447003, 1)
     else
         Gacha.fails = Gacha.fails + 1
         local delay = math.min(300, 45 * 2 ^ (Gacha.fails - 1))
         Gacha.retryAt = os.time() + delay
         UI.status("No new item (cooldown?), retry in " .. delay .. "s")
-        if Gacha.fails == 3 and not Gacha.reportedStuck then
+        if Gacha.fails == 3 and not Gacha.reportedStuck then   -- one report per session at most
             Gacha.reportedStuck = true
             WH.send("report", "Roll not succeeding", "3 failed rolls in a row on " .. LP.Name .. " (" .. beliText .. ")", 15158332, 1)
         end
@@ -1761,149 +1569,9 @@ function Gacha.tick()
     local due = math.max(Store.data.lastRoll + CFG.ROLL_INTERVAL, Gacha.retryAt)
     local rem = due - os.time()
     if rem > 0 then return math.min(rem, 20) end
-    if Sess.endAt - os.time() < 5 then return 5 end
+    if Sess.endAt - os.time() < 5 then return 5 end            -- no new roll in the last seconds of a session
     Gacha.roll()
     return 1
-end
-
-----------------------------------------------------------------
--- 13b. CODES (v23): native auto-redeem
---   WHY native: Vxeze has no such feature, an unknown key in the injected config is simply ignored.
---   * Remote: ReplicatedStorage.Remotes.Redeem (RemoteFunction), the argument is the code. The reply format is not
---     documented, so every raw reply is logged; a code counts as processed once the server answered at all.
---   * Results live in Store.data.codes (per account): an XP code that is sent twice is wasted, a dead one is just noise.
---   * Reset/refund codes are never sent: they would wipe the points the Stats module allocated.
-----------------------------------------------------------------
-Codes.queue, Codes.i, Codes.started, Codes.t0, Codes.noRemote = nil, 1, false, 0, 0
-Codes.done = false
-Codes.counts = { ok = 0, used = 0, dead = 0, unknown = 0, failed = 0, skipped = 0 }
-
-function Codes.blocked(code)
-    local l = string.lower(code)
-    for _, s in ipairs(CFG.CODES.SKIP) do if string.lower(s) == l then return true end end
-    for _, p in ipairs(CFG.CODES.SKIP_PATTERNS) do if l:find(p, 1, true) then return true end end
-    return false
-end
-
-function Codes.build()
-    local seen, list = {}, {}
-    local function add(c)
-        c = tostring(c or ""):match("^%s*(.-)%s*$")
-        -- WHY the charset check: the feed is plain text from a URL, only plausible code strings may reach the remote
-        if c ~= "" and #c <= 40 and c:match("^[%w_%-]+$") and not seen[string.lower(c)] then
-            seen[string.lower(c)] = true
-            list[#list + 1] = c
-        end
-    end
-    for _, c in ipairs(CFG.CODES.LIST) do add(c) end
-    local url = CFG.CODES.FEED_URL
-    if type(url) == "string" and url:match("^https?://") then
-        local ok, body = pcall(function() return game:HttpGet(url) end)
-        if ok and type(body) == "string" then
-            for line in body:gmatch("[^\r\n]+") do
-                if not line:match("^%s*[#%-]") then add((line:gsub("[,;].*$", ""))) end
-            end
-        else
-            Log.add("W", "codes: feed url could not be fetched")
-        end
-    end
-    return list
-end
-
--- InvokeServer yields until the server answers; a code must never be able to stall the whole service.
-local function invokeWithTimeout(remote, timeout, ...)
-    local args, n = { ... }, select("#", ...)
-    local finished, ok, res = false, false, nil
-    task.spawn(function()
-        ok, res = pcall(function() return remote:InvokeServer(table.unpack(args, 1, n)) end)
-        finished = true
-    end)
-    local t0 = os.clock()
-    while not finished and os.clock() - t0 < timeout do task.wait(0.2) end
-    if not finished then return false, "timeout" end
-    return ok, res
-end
-
-local function replyText(r)
-    if type(r) == "string" then return r end
-    if type(r) == "table" then
-        local ok, j = pcall(function() return HttpService:JSONEncode(r) end)
-        return ok and j or tostring(r)
-    end
-    return tostring(r)
-end
-
-function Codes.classify(text)
-    local l = string.lower(text)
-    if l == "" or l == "nil" then return "unknown" end
-    if l:find("already", 1, true) or l:find("used", 1, true) then return "used" end
-    if l:find("invalid", 1, true) or l:find("expire", 1, true) or l:find("not valid", 1, true) or l:find("wrong", 1, true) then return "dead" end
-    return "ok"
-end
-
-function Codes.finish()
-    Codes.done = true
-    local n = Codes.counts
-    local line = string.format("codes: ok=%d used=%d dead=%d unknown=%d failed=%d skipped=%d", n.ok, n.used, n.dead, n.unknown, n.failed, n.skipped)
-    Log.add("I", line)
-    UI.status(line)
-end
-
--- One code per call, so the service heartbeat keeps ticking and a slow server never blocks anything else.
-function Codes.tick()
-    local c = CFG.CODES
-    if not c.ENABLED or Codes.done then return false end
-    if not (Sess.active and not Sess.signaledAt) then return 5 end
-    if not (Team.done() and hasHRP()) then return 5 end
-    local folder = RS:FindFirstChild("Remotes")
-    local remote = folder and folder:FindFirstChild("Redeem")
-    if not remote then
-        Codes.noRemote = Codes.noRemote + 1
-        if Codes.noRemote >= 12 then Log.add("W", "codes: Remotes.Redeem not found, giving up") Codes.done = true return false end
-        return 5
-    end
-    if not Codes.started then Codes.started, Codes.t0 = true, os.clock() end
-    -- WHY a short delay: the XP boost timer starts at redeem, so wait until the character is actually farming
-    if os.clock() - Codes.t0 < c.START_DELAY then return 2 end
-    Codes.queue = Codes.queue or Codes.build()
-
-    local rec = Store.data.codes
-    while Codes.i <= #Codes.queue do
-        local code = Codes.queue[Codes.i]
-        Codes.i = Codes.i + 1
-        local e = rec[code]
-        if Codes.blocked(code) then
-            Codes.counts.skipped = Codes.counts.skipped + 1
-        elseif type(e) == "table" and (e.done or (e.tries or 0) >= c.MAX_TRIES) then
-            Codes.counts.skipped = Codes.counts.skipped + 1    -- handled on an earlier run
-        else
-            local ok, res = invokeWithTimeout(remote, c.REPLY_TIMEOUT, code)
-            e = type(e) == "table" and e or {}
-            if ok then
-                local text = replyText(res)
-                local kind = Codes.classify(text)
-                rec[code] = { done = true, kind = kind, reply = string.sub(text, 1, 80), at = os.time() }
-                Codes.counts[kind] = Codes.counts[kind] + 1
-                Log.add("I", string.format("codes: %s -> %s (%s)", code, kind, string.sub(text, 1, 80)))
-            else
-                e.tries, e.last = (e.tries or 0) + 1, string.sub(tostring(res), 1, 80)
-                rec[code] = e
-                Codes.counts.failed = Codes.counts.failed + 1
-                Log.add("W", string.format("codes: %s failed (%s), try %d/%d", code, tostring(res), e.tries, c.MAX_TRIES))
-            end
-            Store.set("codes", rec)
-            return c.GAP
-        end
-    end
-    Codes.finish()
-    return false
-end
-
--- Manual re-run (env.BloxSM.CodesRun), e.g. after editing CFG.CODES.LIST or pointing FEED_URL at a new list.
-function Codes.rerun()
-    Codes.queue, Codes.i, Codes.started, Codes.done, Codes.noRemote = nil, 1, false, false, 0
-    Codes.counts = { ok = 0, used = 0, dead = 0, unknown = 0, failed = 0, skipped = 0 }
-    Task.service("codes-manual", 3, Codes.tick)
 end
 
 ----------------------------------------------------------------
@@ -1911,93 +1579,44 @@ end
 ----------------------------------------------------------------
 Sea.PLACES = { [2753915549] = 1, [4442272183] = 2, [7449423635] = 3 }
 Sea.cur = Sea.PLACES[game.PlaceId]
-function Sea.reset() Sea.tries, Sea.nextAt, Sea.busy, Sea.busyAt, Sea.readySince = 0, 0, false, 0, nil end
+function Sea.reset() Sea.tries, Sea.nextAt = 0, 0 end
 Sea.reset()
-
--- Keep the script alive across the teleport. ASSUMED: Delta exposes queue_on_teleport and the script is saved as
--- workspace/<CFG.SEA.RELOAD_FILE>. Without either, the scheduler / Delta autoexec must re-run the script in the new server.
-function Sea.queueReload()
-    local c = CFG.SEA
-    if env.BloxReloadQueued == game.JobId then return end
-    local q = queue_on_teleport or (syn and syn.queue_on_teleport)
-    if type(q) ~= "function" or type(c.RELOAD_FILE) ~= "string" or not FS.exists(c.RELOAD_FILE) then
-        Log.add("W", "sea: no reload queued (needs queue_on_teleport + file '" .. tostring(c.RELOAD_FILE) .. "'), relying on autoexec / scheduler")
-        return
-    end
-    if pcall(q, 'loadstring(readfile("' .. c.RELOAD_FILE .. '"))()') then
-        env.BloxReloadQueued = game.JobId
-        Log.add("I", "sea: reload queued from " .. c.RELOAD_FILE)
-    end
-end
--- Let the hub run its own sea quest chain (Ice Admiral / Don Swan style requirements cannot be done by one remote call).
-function Sea.hubAssist()
-    local key = (Sea.cur == 1) and "Auto New World" or "Auto Third World"
-    local targets = {}
-    if type(env.Config) == "table" then targets[1] = env.Config end
-    local okc, copies = pcall(Vx.copies)
-    if okc then for _, t in ipairs(copies) do targets[#targets + 1] = t end end
-    local flipped = false
-    for _, t in ipairs(targets) do
-        if t[key] ~= true then t[key] = true flipped = true end
-    end
-    if flipped then Log.add("W", "sea: hub assist ON (" .. key .. "), the hub runs the sea quest chain itself") end
-end
 function Sea.tick()
-    local c = CFG.SEA
+    if Vx.hub == "kaitun" then return 30 end   -- the hub handles sea travel itself
     if not CFG.SEA_GUARD or not Sess.active or Sess.signaledAt then return 10 end
-    if Sea.cur == nil or Sea.cur == 3 then return 30 end
-    if Sea.busy and os.clock() - Sea.busyAt < 30 then return 3 end
-    if Sea.tries >= c.MAX_TRIES or os.time() < Sea.nextAt then return 10 end
-    -- WHY: v21 fired the remote as soon as Sess.active was set, i.e. possibly during loading / team select where the
-    -- server ignores it. Wait until the character exists, the team is chosen, and a few seconds have passed.
-    if not (game:IsLoaded() and Team.done() and hasHRP()) then Sea.readySince = nil return 5 end
-    Sea.readySince = Sea.readySince or os.clock()
-    if os.clock() - Sea.readySince < c.READY_WAIT then return 5 end
+    if Sea.cur == nil or Sea.cur == 3 or Sea.tries >= 6 or os.time() < Sea.nextAt then return 10 end
     local lv = Vx.readLevel()
     if not lv then return 10 end
-    -- WHY: v21 checked "lv >= 1500" first, so a level-1500+ account standing in SEA 1 fired TravelZou (Sea 2 only). Order is by current sea.
     local remote, label
-    if Sea.cur == 1 and lv >= 700 then remote, label = "TravelDressrosa", "Sea 2"
-    elseif Sea.cur == 2 and lv >= 1500 then remote, label = "TravelZou", "Sea 3" end
-    if not remote then
-        UI.status("Sea guard: level " .. lv .. " too low for the next sea (Sea " .. Sea.cur .. ")")
-        return 120
-    end
+    if lv >= 1500 then remote, label = "TravelZou", "Sea 3"
+    elseif lv >= 700 and Sea.cur == 1 then remote, label = "TravelDressrosa", "Sea 2" end
+    if not remote then Sea.tries = 99 UI.status("Sea guard: level " .. lv .. " too low to travel") return 10 end
     Sea.tries = Sea.tries + 1
-    Sea.nextAt = os.time() + c.TRY_GAP
-    Sea.busy, Sea.busyAt = true, os.clock()
-    UI.status("Sea guard: travelling to " .. label .. " (" .. Sea.tries .. "/" .. c.MAX_TRIES .. ")")
-    if Sea.tries > c.HUB_ASSIST_AFTER then Sea.hubAssist() end
-    -- WHY async: InvokeServer yields until the server answers; run inline it froze this service (watchdog "STALL:sea-guard").
-    Task.spawn("sea-travel", function()
-        local cf = commF()
-        if not cf then Log.add("W", "sea: CommF_ not found") Sea.busy = false return end
-        if Sea.cur == 2 and c.DIAG_ZQUEST then   -- ASSUMED read-only check; only logged, never acted on
-            local okq, rq = pcall(function() return cf:InvokeServer("ZQuestProgress", "Check") end)
-            Log.add("I", "sea: ZQuestProgress/Check -> " .. (okq and (type(rq) .. ":" .. tostring(rq)) or ("error " .. tostring(rq))))
-        end
-        Sea.queueReload()
-        local ok, res = pcall(function() return cf:InvokeServer(remote) end)
-        Log.add(ok and "I" or "W", "sea: " .. remote .. " -> " .. (ok and (type(res) .. ":" .. tostring(res)) or ("error " .. tostring(res))))
-        Sea.busy = false
-    end)
-    return 5
+    Sea.nextAt = os.time() + 45
+    UI.status("Sea guard: travelling to " .. label .. " (" .. Sea.tries .. "/6)")
+    local cf = commF()
+    pcall(function() if cf then cf:InvokeServer(remote) end end)
+    return 10
 end
 
 ----------------------------------------------------------------
--- 14b. STATS
+-- 14b. STATS: priority-based point allocation
+--   * the remote is FireServer based (no return value), so success is judged ONLY from replicated values
+--   * the remote is LEARNED once from a real UI click (Stats.learn) and shared by all accounts through a file
+--   * pauses itself when another allocator (Vxeze "Auto Stats", another script) is touching the same values/remote
 ----------------------------------------------------------------
 Stats.NAMES = { "Melee", "Defense", "Sword", "Gun", "Demon Fruit" }
 Stats.ALIAS = { Fruit = "Demon Fruit", ["Blox Fruit"] = "Demon Fruit" }
-Stats.CODES = { Str = "Melee", Vit = "Defense", Int = "Demon Fruit", SP = "Sword", Agi = "Gun" }
+-- WHY: the real remote takes short codes ("Str", "Vit"...), not display names, so learning must recognise them.
+Stats.CODES   = { Str = "Melee", Vit = "Defense", Int = "Demon Fruit", SP = "Sword", Agi = "Gun" }
 Stats.CODE_OF = { Melee = "Str", Defense = "Vit", ["Demon Fruit"] = "Int", Sword = "SP", Gun = "Agi" }
 Stats.remote, Stats.tpl, Stats.vals, Stats.last = nil, nil, nil, nil
 Stats.pausedUntil, Stats.pauseWhy, Stats.busy, Stats.learnState = 0, nil, false, nil
 Stats.fails, Stats.bindFails, Stats.expectUntil, Stats.amountOk, Stats.dumped, Stats.state = 0, 0, 0, true, false, "off"
-Stats.bad, Stats.zero, Stats.uiMap = {}, {}, nil
 
 local function statKey(name) return Stats.ALIAS[name] or name end
 
+-- Replicated values: Data.Points and Data.Stats.<name>.Level (an IntValue directly under <name> is accepted too).
 function Stats.bind()
     local data = LP:FindFirstChild("Data")
     local pts = data and data:FindFirstChild("Points")
@@ -2026,6 +1645,7 @@ function Stats.remember(points, levels)
     Stats.last = { points = points, levels = copy }
 end
 
+-- Pure planning function (testable without the game): fill the first priority up to its cap, then the next.
 function Stats.plan(points, levels, priority, reserve)
     local plan, left = {}, math.max(0, points - (reserve or 0))
     for _, p in ipairs(priority) do
@@ -2039,12 +1659,14 @@ function Stats.plan(points, levels, priority, reserve)
     end
     return plan, left
 end
+
 function Stats.pause(why, secs)
     Stats.pausedUntil = os.time() + secs
     if Stats.pauseWhy ~= why then Log.add("W", "stats paused: " .. why .. " (" .. secs .. "s)") end
     Stats.pauseWhy = why
 end
 
+-- Another allocator seen through config: Vxeze's own "Auto Stats" (or any boolean key about stats/points).
 function Stats.configForeign()
     local cfg = type(env.Config) == "table" and env.Config or nil
     if not cfg then return false end
@@ -2056,6 +1678,7 @@ function Stats.configForeign()
     end
     return false
 end
+-- Another allocator seen through the values: a level went up / points went down that we did not cause.
 function Stats.valueForeign(points, levels)
     local last = Stats.last
     if not last or os.time() < Stats.expectUntil then return false end
@@ -2065,61 +1688,71 @@ function Stats.valueForeign(points, levels)
     return points < last.points
 end
 
+-- Hook on the C functions FireServer / InvokeServer themselves. WHY not __namecall: a namecall hook runs on every
+-- method call in the game. These two only run when a remote is fired, and the first line of onCall returns at once
+-- unless we are learning or armed. Installed once per process; env.BloxStatsSpy is replaced on every load.
 function Stats.installHook()
     env.BloxStatsSpy = Stats.onCall
-    if type(newcclosure) ~= "function" then return false end
-    if not env.BloxStatsFnHooked and type(hookfunction) == "function" then
-        local good = true
+    if env.BloxStatsHooked then return true end
+    if type(hookfunction) ~= "function" and type(hookmetamethod) ~= "function" then return false end
+    local function viaFunction()
+        if type(hookfunction) ~= "function" or type(newcclosure) ~= "function" then return false end
+        local allOk = true
         local function hook(fn, kind)
             local ok = pcall(function()
                 local old
                 old = hookfunction(fn, newcclosure(function(self, ...)
-                    if env.BloxStatsHot then local spy = env.BloxStatsSpy if spy then spy(self, kind, ...) end end
+                    local spy = env.BloxStatsSpy
+                    if spy then spy(self, kind, ...) end
                     return old(self, ...)
                 end))
             end)
-            if not ok then good = false end
+            if not ok then allOk = false end
         end
         hook(Instance.new("RemoteEvent").FireServer, "FireServer")
         hook(Instance.new("RemoteFunction").InvokeServer, "InvokeServer")
-        env.BloxStatsFnHooked = good
+        return allOk
     end
-    if not env.BloxStatsNsHooked and type(hookmetamethod) == "function" and type(getnamecallmethod) == "function" then
-        local ok = pcall(function()
+    -- WHY both: game code calls remote:FireServer(...) as a METHOD call. On some executors (Delta) replacing the function
+    -- value never sees those calls, because the VM dispatches method calls through __namecall. The namecall hook is
+    -- the one that catches them; onCall de-duplicates when both paths deliver the same call.
+    local function viaNamecall()
+        if type(hookmetamethod) ~= "function" or type(newcclosure) ~= "function" or type(getnamecallmethod) ~= "function" then return false end
+        return (pcall(function()
             local old
             old = hookmetamethod(game, "__namecall", newcclosure(function(self, ...)
-                if not env.BloxStatsHot then return old(self, ...) end
                 local m = getnamecallmethod()
                 if m == "FireServer" or m == "InvokeServer" then
                     local spy = env.BloxStatsSpy
                     if spy then spy(self, m, ...) end
-                    if setnamecallmethod then setnamecallmethod(m) end
                 end
                 return old(self, ...)
             end))
-        end)
-        env.BloxStatsNsHooked = ok
+        end))
     end
-    return (env.BloxStatsFnHooked or env.BloxStatsNsHooked) and true or false
+    local a, b = viaFunction(), viaNamecall()
+    env.BloxStatsHooked = a or b
+    Stats.hookInfo = "function=" .. tostring(a) .. " namecall=" .. tostring(b)
+    Log.add("I", "stats hooks: " .. Stats.hookInfo)
+    return a or b
 end
 function Stats.onCall(remote, kind, ...)
-    local L, T = Stats.learnState, Stats.testCount
-    local isTest = T ~= nil and remote == Stats.testRemote
-    if not L and not isTest and not (Stats.remote and remote == Stats.remote) then return end
+    if not Stats.learnState and not (Stats.remote and remote == Stats.remote) then return end   -- hot path: ignore everything else
     local args = table.pack(...)
-    pcall(function()
-        if isTest then T[T.mode] = (T[T.mode] or 0) + 1 return end
-        if L then
-            L.seen = L.seen + 1
-            L.remotes[remote] = (L.remotes[remote] or 0) + 1
-            Stats.record(remote, kind, args)
-            return
-        end
+    local sig = tostring(remote) .. "|" .. tostring(args[1]) .. "|" .. tostring(args[3]) .. "|" .. math.floor(os.clock() * 25)
+    if sig == Stats.lastSig then return end            -- same call delivered by both hooks
+    Stats.lastSig = sig
+    Stats.seen = (Stats.seen or 0) + 1
+    pcall(function()                                    -- an error here must never reach the game's own remote call
+        if Stats.learnState then Stats.record(remote, kind, args) return end
+        -- WHY a busy flag instead of checkcaller(): the hub is executor code too, so checkcaller() is true for it as well.
+        -- Our own sends happen inside Stats.busy; any other call on the learned remote is someone else allocating.
         if not Stats.busy then Stats.pause("another script fired the stats remote", CFG.STATS.PAUSE_FOREIGN) end
     end)
 end
 
-function Stats.dumpLayout()
+-- ---- remote discovery ----
+function Stats.dumpLayout()   -- written once, to correct paths when the game layout differs from the assumptions
     if Stats.dumped or not FS.ok() then return end
     Stats.dumped = true
     local out = { "== replicated values under Data ==" }
@@ -2138,6 +1771,7 @@ function Stats.dumpLayout()
             end
         end
     end
+    -- Best effort: string constants of the functions behind the stat "+" buttons usually name the remote.
     if type(getconnections) == "function" and type(debug.getconstants) == "function" then
         out[#out + 1] = "== stat button callbacks (string constants) =="
         local main, count = PG:FindFirstChild("Main"), 0
@@ -2164,29 +1798,15 @@ function Stats.dumpLayout()
     Log.add("I", "stats layout written to StatsLayout_" .. UID .. ".txt")
 end
 
+-- Learn: the user presses "+" once on two DIFFERENT stats in the real UI. The two calls differ in exactly the stat
+-- argument, and the replicated delta tells us which numeric argument (if any) is the amount.
 function Stats.learn()
     if not Stats.vals and not Stats.bind() then Stats.dumpLayout() UI.status("LEARN: stat values not found, see StatsLayout file") return false end
-    if not Stats.installHook() then UI.status("LEARN: no usable hook on this executor (hookfunction / hookmetamethod)") return false end
-    local secs = CFG.STATS.LEARN_SECONDS or 90
-    Stats.learnState = { samples = {}, deadline = os.clock() + secs, remote = nil, seen = 0, remotes = {} }
-    env.BloxStatsHot = true
-    UI.status("LEARN: press + on one stat, then + on a DIFFERENT stat (" .. secs .. "s)")
+    if not Stats.installHook() then UI.status("LEARN: hookfunction unavailable on this executor") return false end
+    Stats.seen = 0
+    Stats.learnState = { samples = {}, deadline = os.clock() + 180, remote = nil, nextReport = os.clock() + 8, started = os.clock() }
+    UI.status("LEARN: press + on one stat, then + on a DIFFERENT stat (180s)")
     return true
-end
-function Stats.hookTest()
-    if not Stats.installHook() then UI.status("HOOKTEST: no usable hook on this executor") return false end
-    local r = Instance.new("RemoteEvent")
-    local t = { colon = 0, dot = 0, mode = "colon" }
-    Stats.testRemote, Stats.testCount = r, t
-    local wasHot = env.BloxStatsHot
-    env.BloxStatsHot = true
-    pcall(function() r:FireServer("hooktest") end)
-    t.mode = "dot"
-    pcall(function() r.FireServer(r, "hooktest") end)
-    env.BloxStatsHot = wasHot
-    Stats.testRemote, Stats.testCount = nil, nil
-    UI.status(string.format("HOOKTEST: colon-call seen %d/1, dot-call seen %d/1 (function hook %s, namecall hook %s)", t.colon, t.dot, tostring(env.BloxStatsFnHooked), tostring(env.BloxStatsNsHooked)))
-    return t.colon == 1 and t.dot == 1
 end
 function Stats.record(remote, kind, args)
     local L = Stats.learnState
@@ -2197,13 +1817,13 @@ function Stats.record(remote, kind, args)
             for _, name in ipairs(Stats.NAMES) do if a == name or Stats.ALIAS[a] == name or Stats.CODES[a] == name then stat = name end end
         end
     end
-    if not stat then return end
+    if not stat then return end                                   -- unrelated remote call
     for i = 1, args.n do
         local t = type(args[i])
-        if t ~= "string" and t ~= "number" and t ~= "boolean" then return end
+        if t ~= "string" and t ~= "number" and t ~= "boolean" then return end   -- must be JSON-safe to be stored
     end
     if L.remote and L.remote ~= remote then return end
-    for _, s in ipairs(L.samples) do if s.stat == stat then return end end
+    for _, s in ipairs(L.samples) do if s.stat == stat then return end end      -- need two different stats
     L.remote = remote
     local p, lv = Stats.read()
     local sample = { stat = stat, kind = kind, args = args, before = lv and lv[stat], done = false }
@@ -2220,6 +1840,7 @@ function Stats.derive(L)
     if s1.args.n ~= s2.args.n then return false, "argument count differs between the two clicks" end
     if not (s1.delta and s1.delta > 0 and s2.delta and s2.delta > 0) then return false, "stat level did not increase (values not replicated?)" end
     local n = s1.args.n
+    -- WHY: the full name embeds this account's username, so a file shared by all accounts only resolved for the one that learned it.
     local full = L.remote:GetFullName()
     local rel = full:match("^Players%.[^%.]+%.PlayerGui%.(.+)$")
     local tpl = { path = rel or full, gui = rel ~= nil, kind = s1.kind, n = n, args = {}, statArg = {} }
@@ -2230,7 +1851,7 @@ function Stats.derive(L)
             tpl.statSlot = i
             tpl.statArg[s1.stat], tpl.statArg[s2.stat] = a, b
         elseif type(a) == "number" and a == b and s1.delta == a and s2.delta == a then
-            tpl.amountSlot = i
+            tpl.amountSlot = i              -- the number that equals the observed gain is the amount
         end
     end
     if not tpl.statSlot then return false, "could not find the stat argument" end
@@ -2240,43 +1861,41 @@ function Stats.derive(L)
 end
 function Stats.learnTick()
     local L = Stats.learnState
-    local function cool() env.BloxStatsHot = (CFG.STATS.WATCH_REMOTE and Stats.remote ~= nil) or false end
     if os.clock() > L.deadline then
-        local names, n = {}, 0
-        for r, cnt in pairs(L.remotes) do
-            n = n + 1
-            if n <= 6 then
-                local ok, nm = pcall(r.GetFullName, r)
-                names[#names + 1] = (ok and nm or "?") .. " x" .. cnt
-            end
-        end
         Stats.learnState = nil
-        cool()
-        UI.status(string.format("LEARN: timed out, hooks saw %d remote call(s) [function hook %s, namecall hook %s] %s", L.seen, tostring(env.BloxStatsFnHooked), tostring(env.BloxStatsNsHooked), table.concat(names, ", ")))
+        UI.status("LEARN: timed out, " .. (Stats.seen or 0) .. " remote calls seen. " ..
+            ((Stats.seen or 0) == 0 and "Hooks never fired on this executor: use CFG.STATS.MANUAL." or "Calls were seen but none matched a stat."))
         return 30
+    end
+    if os.clock() >= L.nextReport then   -- diagnostics: tells "hook never fires" apart from "calls ignored by the filter"
+        L.nextReport = os.clock() + 8
+        UI.status("LEARN: " .. (Stats.seen or 0) .. " remote calls seen, " .. #L.samples .. "/2 captured (" .. tostring(Stats.hookInfo) .. ")")
     end
     if #L.samples >= 2 and L.samples[1].done and L.samples[2].done then
         local ok, err = Stats.derive(L)
         Stats.learnState = nil
-        cool()
         UI.status(ok and "LEARN: remote saved, set CFG.STATS.ENABLED = true" or ("LEARN failed: " .. tostring(err)))
         return 10
     end
     return 1
 end
-function Stats.resolve()
-    local tpl = FS.readJSON(CFG.STATS.REMOTE_FILE)
-    if tpl and tpl.kind == "ui" then          -- v22: the "+" buttons are the driver, mapped by label every time PlayerGui is rebuilt
-        Stats.uiReverse = tpl.reverse == true
-        local map = Stats.uiMapButtons()
-        if map and next(map) then
-            local any
-            for _, b in pairs(map) do any = b break end
-            Stats.uiMap, Stats.tpl, Stats.remote = map, tpl, any
-            return true
+function Stats.resolve()      -- the remote may not be replicated yet right after joining
+    local m = CFG.STATS.MANUAL
+    if m and type(m.path) == "string" and type(m.args) == "table" then
+        local inst = m.gui and PG or game
+        for seg in string.gmatch(m.path, "[^%.]+") do inst = inst and inst:FindFirstChild(seg) end
+        if inst and inst ~= game and inst ~= PG and (inst:IsA("RemoteEvent") or inst:IsA("RemoteFunction")) then
+            local tpl = { path = m.path, gui = m.gui and true or false, kind = m.kind or "FireServer", n = #m.args, args = {}, statArg = Stats.CODE_OF }
+            for i, a in ipairs(m.args) do
+                if a == "{stat}" then tpl.statSlot, tpl.args[i] = i, "Str"
+                elseif a == "{amount}" then tpl.amountSlot, tpl.args[i] = i, 1
+                else tpl.args[i] = a end
+            end
+            if tpl.statSlot then Stats.tpl, Stats.remote = tpl, inst return true end
         end
         return false
     end
+    local tpl = FS.readJSON(CFG.STATS.REMOTE_FILE)
     if not tpl or type(tpl.path) ~= "string" or type(tpl.args) ~= "table" then return false end
     local inst = tpl.gui and PG or game
     for seg in string.gmatch(tpl.path, "[^%.]+") do inst = inst and inst:FindFirstChild(seg) end
@@ -2287,406 +1906,7 @@ function Stats.resolve()
     return false
 end
 
-function Stats.findRemote()
-    local rel = CFG.STATS.REMOTE_PATH
-    if rel and rel ~= "" then
-        local inst = PG
-        for seg in string.gmatch(rel, "[^%.]+") do inst = inst and inst:FindFirstChild(seg) end
-        if inst and inst ~= PG and (inst:IsA("RemoteEvent") or inst:IsA("RemoteFunction")) then return inst end
-    end
-    local box = PG:FindFirstChild("AddingPoints", true)
-    for _, d in ipairs(box and box:GetDescendants() or {}) do
-        if d:IsA("RemoteEvent") or d:IsA("RemoteFunction") then return d end
-    end
-end
-function Stats.remoteCandidates()
-    local out = {}
-    -- WHY CommF_ first: it is the remote every Blox Fruits stat script has used for years and it takes the stat's internal
-    -- English name, so the language of the game UI does not matter.
-    local folder = RS:FindFirstChild("Remotes")
-    local cf = folder and folder:FindFirstChild("CommF_")
-    if cf then out[#out + 1] = { remote = cf, tag = "CommF_", style = "name", shapes = CFG.STATS.COMMF_SHAPES } end
-    local r = Stats.findRemote()
-    if r then out[#out + 1] = { remote = r, tag = "StatsFrame", style = "code", shapes = CFG.STATS.PROBE_SHAPES } end
-    return out
-end
-local function fillShape(shape, code, amount)
-    local out = {}
-    for i, v in ipairs(shape) do
-        if v == "{stat}" then out[i] = code
-        elseif v == "{n}" then out[i] = amount or 1
-        else out[i] = v end
-    end
-    return out
-end
--- ---- v22 probe: every attempt is logged to StatsProbe_<UID>.txt so a failure explains itself ----
-function Stats.logProbe(line)
-    Stats.probeLog = Stats.probeLog or {}
-    local pl = Stats.probeLog
-    pl[#pl + 1] = os.date("%H:%M:%S") .. " " .. line
-    if #pl > 120 then table.remove(pl, 1) end
-    FS.write("StatsProbe_" .. UID .. ".txt", table.concat(pl, "\n"))
-end
-function Stats.snapData()
-    local out, n = {}, 0
-    local data = LP:FindFirstChild("Data")
-    if not data then return out end
-    for _, d in ipairs(data:GetDescendants()) do
-        if d:IsA("ValueBase") then
-            n = n + 1
-            if n > 400 then break end
-            local ok, v = pcall(function() return d.Value end)
-            if ok then out[d:GetFullName()] = v end
-        end
-    end
-    return out
-end
-function Stats.diffData(a, b)
-    local d = {}
-    for k, v in pairs(b) do
-        if a[k] ~= v then
-            local short = (k:gsub("^.-%.Data%.", ""))
-            d[#d + 1] = short .. ": " .. tostring(a[k]) .. " -> " .. tostring(v)
-        end
-    end
-    table.sort(d)
-    return d
-end
--- Run `fire`, then watch the replicated values. Returns gainedStat|nil, pointsDelta|nil, changedList, errorText|nil.
-function Stats.attempt(fire)
-    local c = CFG.STATS
-    local before = Stats.snapData()
-    local p0, l0 = Stats.read()
-    l0 = l0 or {}
-    Stats.expectUntil = os.time() + c.VERIFY_TIMEOUT + 5
-    Stats.busy = true
-    local ok, err = pcall(fire)
-    Stats.busy = false
-    local gained, t0 = nil, os.clock()
-    repeat
-        task.wait(0.25)
-        local _, l1 = Stats.read()
-        for name, lv in pairs(l1 or {}) do if lv > (l0[name] or lv) then gained = name end end
-    until gained or os.clock() - t0 > c.VERIFY_TIMEOUT
-    local p1 = Stats.read()
-    local diff = Stats.diffData(before, Stats.snapData())
-    return gained, (p0 and p1) and (p0 - p1) or nil, diff, (not ok) and tostring(err) or nil
-end
-
-function Stats.uiRoot()
-    local root = PG:FindFirstChild("StatsFrame", true)
-    if not root then
-        local box = PG:FindFirstChild("AddingPoints", true)
-        root = box and box.Parent
-    end
-    return root
-end
-function Stats.dumpUi()
-    if not FS.ok() then return end
-    local root = Stats.uiRoot()
-    local out = { "root: " .. (root and root:GetFullName() or "NOT FOUND") }
-    if root then
-        local n = 0
-        for _, d in ipairs(root:GetDescendants()) do
-            n = n + 1
-            if n > 300 then out[#out + 1] = "... truncated" break end
-            local txt = (d:IsA("TextLabel") or d:IsA("TextButton")) and d.Text or ""
-            local vis = d:IsA("GuiObject") and tostring(d.Visible) or "-"
-            out[#out + 1] = string.format("%s [%s] vis=%s text=%q", (d:GetFullName():gsub("^.-PlayerGui%.", "")), d.ClassName, vis, txt)
-        end
-    end
-    FS.write("StatsUiDump_" .. UID .. ".txt", table.concat(out, "\n"))
-    Log.add("I", "stats UI layout written to StatsUiDump_" .. UID .. ".txt")
-end
--- Language-independent mapping: "+" is not localised, and the five stat rows are stacked in the game's fixed order
--- (Melee, Defense, Sword, Gun, Demon Fruit). probeUi verifies the first click and flips the order if the layout is reversed.
-Stats.uiReverse = false
-function Stats.mapByOrder()
-    local root = Stats.uiRoot() or PG
-    local rows, n = {}, 0
-    for _, d in ipairs(root:GetDescendants()) do
-        n = n + 1
-        if n > 8000 then break end
-        if d:IsA("GuiButton") then
-            local t = d:IsA("TextButton") and (d.Text or ""):match("^%s*(.-)%s*$") or ""
-            local nm = string.lower(d.Name)
-            if t == "+" or nm == "plus" or nm == "add" or nm == "addpoint" or nm == "addpoints" then
-                local under, p = (root ~= PG), d.Parent
-                for _ = 1, 8 do
-                    if under or not p or p == PG then break end
-                    if string.lower(p.Name):find("stat", 1, true) then under = true end
-                    p = p.Parent
-                end
-                if under then rows[#rows + 1] = { b = d, idx = n } end
-            end
-        end
-    end
-    -- WHY idx as last tie-break: AbsolutePosition can be zero while the menu is closed, then DOM order is all we have
-    table.sort(rows, function(a, b)
-        local ay, by = a.b.AbsolutePosition.Y, b.b.AbsolutePosition.Y
-        if math.abs(ay - by) > 4 then return ay < by end
-        local ax, bx = a.b.AbsolutePosition.X, b.b.AbsolutePosition.X
-        if math.abs(ax - bx) > 4 then return ax < bx end
-        return a.idx < b.idx
-    end)
-    if #rows ~= #Stats.NAMES then
-        Stats.logProbe("ui order map: found " .. #rows .. " plus buttons, expected " .. #Stats.NAMES)
-        return nil
-    end
-    local map, ordered = {}, {}
-    for i, r in ipairs(rows) do
-        ordered[i] = r.b
-        map[Stats.NAMES[Stats.uiReverse and (#rows + 1 - i) or i]] = r.b
-    end
-    Stats.uiOrder = ordered
-    return map
-end
--- Map stat -> "+" button by reading the labels around each GuiButton. A stat is only accepted when exactly ONE stat
--- identifier (melee/str, defense/vit, sword/sp, gun/agi, fruit/int) appears at the closest container level.
-function Stats.uiMapButtons()
-    Stats.uiOrder = nil
-    local root = Stats.uiRoot()
-    if not root then
-        local m = Stats.mapByOrder()
-        if m and next(m) then return m end
-        return nil, "StatsFrame not found"
-    end
-    local ids = {}
-    for stat, code in pairs(Stats.CODE_OF) do ids[string.lower(stat)] = stat ids[string.lower(code)] = stat end
-    ids["fruit"], ids["demon"] = "Demon Fruit", "Demon Fruit"
-    ids["serangan"], ids["dekat"] = "Melee", "Melee"
-    ids["pertahanan"] = "Defense"
-    ids["senjata"] = "Sword"
-    ids["buah"], ids["blox"] = "Demon Fruit", "Demon Fruit"
-    local function statsIn(text)
-        local found, count = {}, 0
-        for w in string.gmatch(string.lower(splitCamel(tostring(text))), "%a+") do
-            local st = ids[w]
-            if st and not found[st] then found[st] = true count = count + 1 end
-        end
-        return found, count
-    end
-    local best, n = {}, 0
-    for _, b in ipairs(root:GetDescendants()) do
-        if b:IsA("GuiButton") then
-            n = n + 1
-            if n > 200 then break end
-            local owner, level = nil, b
-            for _ = 1, 4 do
-                if not level then break end
-                local texts = { level.Name }
-                if level:IsA("TextButton") then texts[#texts + 1] = level.Text end
-                for _, ch in ipairs(level:GetChildren()) do
-                    texts[#texts + 1] = ch.Name
-                    if ch:IsA("TextLabel") or (ch:IsA("TextButton") and ch ~= b) then texts[#texts + 1] = ch.Text end
-                end
-                local found, count = statsIn(table.concat(texts, " "))
-                if count == 1 then owner = next(found) break end
-                if count > 1 then break end
-                level = level.Parent
-            end
-            if owner then
-                local score = 0
-                local label = b:IsA("TextButton") and b.Text or ""
-                local nm = string.lower(b.Name)
-                if label:find("+", 1, true) then score = score + 3 end
-                if nm:find("add", 1, true) or nm:find("plus", 1, true) then score = score + 2 end
-                if label:find("-", 1, true) or nm:find("minus", 1, true) or nm:find("max", 1, true) or nm:find("reset", 1, true) then score = score - 3 end
-                if not best[owner] or score > best[owner].score then best[owner] = { btn = b, score = score } end
-            end
-        end
-    end
-    local map = {}
-    for stat, e in pairs(best) do map[stat] = e.btn end
-    if not next(map) then map = Stats.mapByOrder() or {} end    -- labels did not match (localised UI): fall back to position
-    return map
-end
-
-function Stats.probeRemote(remote, cand, opts)
-    opts = opts or {}
-    local c = CFG.STATS
-    local isFn = remote:IsA("RemoteFunction")
-    local shapes = opts.shapes or c.PROBE_SHAPES
-    local style = opts.style or "code"        -- "code": Str/Vit/... | "name": Melee/Defense/... (display names, UI language independent)
-    Stats.logProbe("remote " .. remote:GetFullName() .. " [" .. remote.ClassName .. "] style=" .. style)
-    for si, shape in ipairs(shapes) do
-        local slot, nslot
-        for i, v in ipairs(shape) do if v == "{stat}" then slot = i elseif v == "{n}" then nslot = i end end
-        if slot then
-            local stat = cand[1]                   -- first stat that is NOT at its cap (a capped stat can never prove a shape)
-            local code = (style == "name") and stat or Stats.CODE_OF[stat]
-            local args = fillShape(shape, code, 1)
-            local parts = {}
-            for i = 1, #shape do parts[i] = tostring(args[i]) end
-            local gained, dPts, diff, err = Stats.attempt(function()
-                if isFn then
-                    -- WHY spawn: InvokeServer yields until the server answers; the verification must not wait on it forever
-                    task.spawn(function()
-                        local ok, e = pcall(remote.InvokeServer, remote, table.unpack(args, 1, #shape))
-                        if not ok then Stats.logProbe("invoke error: " .. tostring(e)) end
-                    end)
-                else
-                    remote:FireServer(table.unpack(args, 1, #shape))
-                end
-            end)
-            Stats.logProbe(string.format("shape#%d (%s) stat=%s -> gained=%s pointsDelta=%s err=%s changed={%s}",
-                si, table.concat(parts, ", "), stat, tostring(gained), tostring(dPts), tostring(err), table.concat(diff, "; ", 1, math.min(#diff, 8))))
-            if gained or (dPts and dPts > 0) then
-                if not gained then
-                    Stats.dumpLayout()
-                    return false, "call shape #" .. si .. " works (points dropped by " .. tostring(dPts) .. ") but no bound stat value moved, see StatsProbe / StatsLayout files"
-                end
-                local map = {}
-                for st, cd in pairs(Stats.CODE_OF) do map[st] = (style == "name") and st or cd end   -- other stats are INFERRED; allocate() drops any that prove wrong
-                map[gained] = code
-                local full = remote:GetFullName()
-                local rel = full:match("^Players%.[^%.]+%.PlayerGui%.(.+)$")
-                local tpl = { path = rel or full, gui = rel ~= nil, kind = isFn and "InvokeServer" or "FireServer", n = #shape,
-                    args = fillShape(shape, code, 1), statSlot = slot, amountSlot = nslot, statArg = map, probed = true }
-                if not FS.writeJSON(c.REMOTE_FILE, tpl) then Log.add("W", "stats: could not write " .. c.REMOTE_FILE .. ", template kept in memory only") end
-                Stats.tpl, Stats.remote, Stats.bad, Stats.zero = tpl, remote, {}, {}
-                Stats.amountOk = true
-                local p, lv = Stats.read()
-                if p then Stats.remember(p, lv) end
-                Log.add("I", "stats probe ok: " .. (opts.tag or remote.Name) .. " shape #" .. si .. " (" .. table.concat(parts, ", ") .. ")")
-                return true
-            end
-        end
-    end
-    return false, "no call shape produced a verified level gain"
-end
-function Stats.probeUi(cand)
-    local map, why = Stats.uiMapButtons()
-    if not map or not next(map) then
-        Stats.dumpUi()
-        return false, "ui: " .. tostring(why or "no stat buttons recognised") .. " (see StatsUiDump file)"
-    end
-    local names = {}
-    for st, b in pairs(map) do names[#names + 1] = st .. "=" .. (b:GetFullName():gsub("^.-PlayerGui%.", "")) end
-    table.sort(names)
-    Stats.logProbe("ui map: " .. table.concat(names, " | "))
-    for _, stat in ipairs(cand) do
-        local b = map[stat]
-        if b then
-            local gained, dPts, diff, err = Stats.attempt(function()
-                if not Input.click(b) then error("no connection fired on the button") end
-            end)
-            Stats.logProbe(string.format("ui click %s -> gained=%s pointsDelta=%s err=%s changed={%s}", stat, tostring(gained), tostring(dPts), tostring(err), table.concat(diff, "; ", 1, math.min(#diff, 8))))
-            if gained and gained ~= stat and Stats.uiOrder and not Stats.uiReverse then
-                -- WHY: the order map assumed Melee on top. If the click raised another stat the layout is reversed.
-                Stats.uiReverse = true
-                local m2 = Stats.mapByOrder()
-                if m2 and m2[gained] == b then
-                    map = m2
-                    Stats.logProbe("ui order map was reversed, corrected")
-                else
-                    Stats.uiReverse, gained = false, nil
-                    Stats.logProbe("ui order map does not match what the click did, giving up on it")
-                end
-            end
-            if gained then
-                local tpl = { kind = "ui", n = 0, path = "", args = {}, probed = true, statArg = {}, reverse = Stats.uiReverse }
-                for st in pairs(map) do tpl.statArg[st] = true end
-                if not FS.writeJSON(CFG.STATS.REMOTE_FILE, tpl) then Log.add("W", "stats: could not write " .. CFG.STATS.REMOTE_FILE) end
-                Stats.uiMap, Stats.tpl, Stats.remote, Stats.bad, Stats.zero = map, tpl, b, {}, {}
-                local p, lv = Stats.read()
-                if p then Stats.remember(p, lv) end
-                Log.add("I", "stats probe ok: UI driver (" .. #names .. " button(s) mapped)")
-                return true
-            end
-            break      -- one verification click only: every attempt that works costs a point
-        end
-    end
-    Stats.dumpUi()
-    return false, "ui: click produced no verified level gain (see StatsProbe / StatsUiDump files)"
-end
-
-function Stats.probe()
-    local c = CFG.STATS
-    if Stats.busy then return false, "busy" end
-    if not Stats.vals and not Stats.bind() then return false, "stat values (Data.Points / Data.Stats) not found" end
-    local points, levels = Stats.read()
-    local need = c.PROBE_MIN_POINTS or 2
-    if not points or points < need then return false, "need at least " .. need .. " unspent points (have " .. tostring(points) .. ")" end
-    -- WHY: v21 always started with "Str" (Melee). At level 2800 Melee is usually at its cap, the server refuses, no level
-    -- moves, and EVERY shape looked wrong. Candidates are therefore the stats still below their cap, in priority order.
-    local cand = {}
-    for _, p in ipairs(c.PRIORITY) do
-        local stat = statKey(p.stat)
-        local lv = levels[stat]
-        if lv and Stats.CODE_OF[stat] and lv < (p.cap or 2550) then cand[#cand + 1] = stat end
-    end
-    if #cand == 0 then return false, "every stat is at its cap, nothing to allocate" end
-    Stats.logProbe(string.format("probe start: points=%s candidates=%s", tostring(points), table.concat(cand, ",")))
-    local tried = 0
-    for _, cd in ipairs(Stats.remoteCandidates()) do
-        tried = tried + 1
-        local ok, err = Stats.probeRemote(cd.remote, cand, cd)
-        if ok then return true end
-        Stats.logProbe(cd.tag .. " probe: " .. tostring(err))
-        if err and err:find("works", 1, true) then return false, err end    -- the call works; the problem is the value binding, do not spend more points
-    end
-    if tried == 0 then Stats.logProbe("no stats remote found (Remotes.CommF_ / PlayerGui)") end
-    if c.UI_FALLBACK then
-        local ok, err = Stats.probeUi(cand)
-        if ok then return true end
-        return false, err or "ui probe failed"
-    end
-    return false, "no call shape produced a verified level gain"
-end
-function Stats.autoProbe()
-    local ok, err = Stats.probe()
-    if ok then
-        Stats.state = "probed"
-        UI.status("STATS: remote calibrated by probe")
-        return 5
-    end
-    Stats.probeFails = (Stats.probeFails or 0) + 1
-    Stats.lastErr = err
-    local wait
-    if err and err:find("need at least", 1, true) then wait = 120
-    elseif err and err:find("at its cap", 1, true) then wait = 600
-    else wait = math.min(1800, 60 * 2 ^ Stats.probeFails) end
-    Stats.probeAt = os.time() + wait
-    Stats.state = "probe failed"
-    UI.status("STATS: probe failed (" .. tostring(err) .. "), retry in " .. wait .. "s")
-    return 30
-end
--- One-shot diagnosis (env.BloxSM.StatsWhy): prints everything that decides whether stats can work on this account.
-function Stats.why()
-    local lines = {}
-    local function add(s) lines[#lines + 1] = s end
-    add("values bound: " .. tostring(Stats.vals ~= nil or Stats.bind()))
-    local p, lv = Stats.read()
-    add("unspent points: " .. tostring(p) .. "  (probe needs >= " .. tostring(CFG.STATS.PROBE_MIN_POINTS) .. "; 0 means nothing to allocate, not a bug)")
-    if lv then for _, nm in ipairs(Stats.NAMES) do add("  " .. nm .. " = " .. tostring(lv[nm])) end end
-    local folder = RS:FindFirstChild("Remotes")
-    add("Remotes.CommF_: " .. tostring(folder ~= nil and folder:FindFirstChild("CommF_") ~= nil))
-    add("StatsFrame remote: " .. tostring(Stats.findRemote() ~= nil))
-    add("plus buttons (position map): " .. tostring(Stats.mapByOrder() ~= nil))
-    add("driver bound: " .. tostring(Stats.remote ~= nil) .. "  state: " .. tostring(Stats.state) .. "  lastErr: " .. tostring(Stats.lastErr))
-    for _, l in ipairs(lines) do print("[BloxSM] " .. l) Log.add("I", "stats why: " .. l) end
-end
-function Stats.probeNow()
-    Task.spawn("stats-probe", function()
-        local ok, err = Stats.probe()
-        UI.status(ok and "PROBE: calibrated and saved" or ("PROBE failed: " .. tostring(err)))
-    end)
-end
-function Stats.usablePriority(prio)
-    local tpl = Stats.tpl
-    local out = {}
-    for _, p in ipairs(prio) do
-        local st = statKey(p.stat)
-        local t = Stats.bad[st]
-        if t and os.time() - t > 1800 then Stats.bad[st], Stats.zero[st], t = nil, 0, nil end   -- give a dropped stat another chance after 30 min
-        local ok = not t
-        if ok and tpl and tpl.kind == "ui" then ok = Stats.uiMap ~= nil and Stats.uiMap[st] ~= nil end
-        if ok then out[#out + 1] = p end
-    end
-    return out
-end
-
+-- ---- allocation ----
 function Stats.fire(args)
     local r, tpl = Stats.remote, Stats.tpl
     Stats.busy = true
@@ -2707,27 +1927,12 @@ function Stats.buildArgs(stat, amount)
     end
     return args
 end
+-- Sends up to n points of one stat; returns how many calls' worth of points were attempted.
 function Stats.sendStat(stat, n, budget)
     local tpl = Stats.tpl
-    if tpl.kind == "ui" then                  -- v22 UI driver: click the game's own "+" button (correct args by construction)
-        local b = Stats.uiMap and Stats.uiMap[stat]
-        if not (b and b.Parent) then return 0 end
-        local sent = 0
-        for _ = 1, math.min(n, budget) do
-            Stats.busy = true
-            local fired = Input.click(b)
-            Stats.busy = false
-            if not fired then break end
-            sent = sent + 1
-            task.wait(CFG.STATS.SEND_DELAY)
-        end
-        return sent
-    end
     if tpl.amountSlot and Stats.amountOk then
-        -- WHY clamp: one huge amount is the first thing a server-side sanity check rejects
-        local amt = math.max(1, math.min(n, budget))
-        Stats.fire(Stats.buildArgs(stat, amt))
-        return amt
+        Stats.fire(Stats.buildArgs(stat, n))
+        return n
     end
     local sent = 0
     for _ = 1, math.min(n, budget) do
@@ -2737,9 +1942,10 @@ function Stats.sendStat(stat, n, budget)
     end
     return sent
 end
+-- Verification by replicated values (the remote returns nothing): the level must rise and the points must fall.
 function Stats.allocate(stat, n, budget)
     local p0, l0 = Stats.read()
-    if not p0 then return 0, 0, nil end
+    if not p0 then return 0, 0, nil end   -- values vanished between the tick check and now
     local before = l0[stat] or 0
     Stats.expectUntil = os.time() + CFG.STATS.VERIFY_TIMEOUT + 5
     local sent = Stats.sendStat(stat, n, budget)
@@ -2751,25 +1957,29 @@ function Stats.allocate(stat, n, budget)
     until gained >= sent or os.clock() - t0 > CFG.STATS.VERIFY_TIMEOUT
     local p1, l1 = Stats.read()
     if p1 then Stats.remember(p1, l1) end
+    -- The "amount" argument was a guess: if a bulk call only applied one point, fall back to single calls.
     if Stats.tpl.amountSlot and Stats.amountOk and sent > 1 and gained == 1 then
         Stats.amountOk = false
         Log.add("W", "stats: the server ignored the amount argument, switching to single-point calls")
     end
     return gained, sent, p0 and p1 and (p0 - p1) or nil
 end
+
 function Stats.statusText()
     if Stats.learnState then return "learning" end
     if not CFG.STATS.ENABLED then return "off" end
     if os.time() < Stats.pausedUntil then return "paused: " .. tostring(Stats.pauseWhy) end
-    if not Stats.remote then return "no remote: " .. tostring(Stats.lastErr or "probe pending") end
+    if not Stats.remote then return "no remote (run StatsLearn)" end
     return Stats.state
 end
+
 function Stats.tick()
     local c = CFG.STATS
     if Stats.learnState then return Stats.learnTick() end
     if not c.ENABLED then return 30 end
     if not Sess.active or Sess.signaledAt then return 10 end
     if not (Team.done() and hasHRP()) then return 5 end
+    -- "UI not loaded": the values live under Data, which replicates later than the character; wait with backoff.
     if not Stats.vals and not Stats.bind() then
         Stats.bindFails = Stats.bindFails + 1
         Stats.state = "waiting for Data"
@@ -2777,14 +1987,11 @@ function Stats.tick()
         return math.min(60, 5 * Stats.bindFails)
     end
     Stats.bindFails = 0
+    -- WHY IsDescendantOf: PlayerGui is rebuilt on respawn, so a cached remote silently dies and fires into the void.
     if not (Stats.remote and Stats.remote:IsDescendantOf(game)) then
         Stats.remote = nil
-        if not Stats.resolve() then
-            if c.AUTO_PROBE and os.time() >= (Stats.probeAt or 0) then return Stats.autoProbe() end
-            Stats.state = "waiting for remote"
-            return 30
-        end
-        if c.WATCH_REMOTE and Stats.installHook() then env.BloxStatsHot = true end
+        if not Stats.resolve() then Stats.state = "waiting for remote" return 30 end
+        if CFG.STATS.DETECT_HOOK then Stats.installHook() end
     end
     local points, levels = Stats.read()
     if not points then Stats.vals = nil return 5 end
@@ -2797,57 +2004,35 @@ function Stats.tick()
     Stats.pauseWhy = nil
     if not Stats.last then Stats.remember(points, levels) end
     if points <= c.RESERVE then Stats.remember(points, levels) Stats.state = "idle" return 15 end
-    -- v22: drop stats that proved unusable BEFORE planning; otherwise a dead stat still swallows the whole point budget
-    local plan = Stats.plan(points, levels, Stats.usablePriority(c.PRIORITY), c.RESERVE)
-    if #plan == 0 then
-        Stats.remember(points, levels)
-        if #Stats.plan(points, levels, c.PRIORITY, c.RESERVE) > 0 then
-            local bad = {}
-            for st in pairs(Stats.bad) do bad[#bad + 1] = st end
-            table.sort(bad)
-            Stats.state = "no usable stat (dropped: " .. table.concat(bad, ",") .. ")"
-            return 300
-        end
-        Stats.state = "all caps reached"
-        return 60
-    end
+    local plan = Stats.plan(points, levels, c.PRIORITY, c.RESERVE)
+    if #plan == 0 then Stats.remember(points, levels) Stats.state = "all caps reached" return 60 end
+    -- Batch: one cycle works through the whole plan. Remotes without an amount argument share BATCH_MAX single calls.
     local budget, anyGain, anyTry = c.BATCH_MAX, false, false
     for _, step in ipairs(plan) do
         if budget <= 0 then break end
         local gained, sent = Stats.allocate(step.stat, step.n, budget)
         budget = budget - ((Stats.tpl.amountSlot and Stats.amountOk) and 1 or sent)
         if sent > 0 then anyTry = true end
-        if gained > 0 then anyGain = true Stats.zero[step.stat] = 0
-        elseif sent > 0 then
-            -- v22: a stat that ignores us twice in a row (wrong inferred code / hidden cap) is dropped instead of poisoning the whole cycle
-            Stats.zero[step.stat] = (Stats.zero[step.stat] or 0) + 1
-            if Stats.zero[step.stat] >= 2 and not Stats.bad[step.stat] then
-                Stats.bad[step.stat] = os.time()
-                Log.add("W", "stats: '" .. step.stat .. "' ignored " .. Stats.zero[step.stat] .. " attempts in a row, skipping it (cap reached or wrong code)")
-            end
-        end
+        if gained > 0 then anyGain = true end
         Log.add("I", string.format("stats: %s +%d sent, +%d confirmed", step.stat, sent, gained))
-        if os.time() < Stats.pausedUntil then break end
+        if os.time() < Stats.pausedUntil then break end         -- another allocator appeared meanwhile
     end
     if anyGain then Stats.fails, Stats.state = 0, "ok"
     elseif anyTry then
         Stats.fails = Stats.fails + 1
         Stats.state = "no effect x" .. Stats.fails
         if Stats.fails >= 5 then
-            -- WHY: a template that stopped working (game update, stale file) must not be trusted for 30 minutes: forget it and re-probe
-            FS.delete(CFG.STATS.REMOTE_FILE)
-            Stats.remote, Stats.tpl, Stats.probeAt = nil, nil, 0
-            Stats.pause("remote has no effect, re-probing", 120)
+            Stats.pause("remote has no effect, run StatsLearn again", 1800)
             WH.send("report", "Stats allocation has no effect", "Account " .. LP.Name .. ": 5 attempts changed nothing", 15158332, 2)
             Stats.fails = 0
         end
-        return math.min(90, 5 * 2 ^ Stats.fails)
+        return math.min(90, 5 * 2 ^ Stats.fails)   -- WHY: must stay below STALL_AFTER or the watchdog flags a false stall
     end
     return 5
 end
 
 ----------------------------------------------------------------
--- 15. DASHBOARD
+-- 15. DASHBOARD (in-game panel + status file for external tools)
 ----------------------------------------------------------------
 UI.last, UI.text = "Booting...", ""
 function UI.status(t)
@@ -2930,7 +2115,6 @@ local function Unload()
     if not S.alive then return end
     S.alive = false
     Group.release()
-    env.BloxStatsHot, env.BloxStatsSpy = false, nil
     Log.add("I", "unloading")
     Log.flush() Store.save(true) WH.saveOutbox()
     for _, c in ipairs(S.conns) do pcall(function() c:Disconnect() end) end
@@ -2943,16 +2127,8 @@ env.BloxSM = {
     ResetSession = function() FS.delete(Sess.filePath()) Log.add("I", "session file deleted") end,
     Status = function() print(UI.text) return UI.text end,
     StatsLearn = Stats.learn,
-    StatsProbe = Stats.probeNow,
-    StatsUiDump = Stats.dumpUi,
-    DmgProbe = function() Dmg.startProbe() end,
-    GuardNow = function() return Vx.enforceAll() end,
-    StatsHookTest = function() Task.spawn("stats-hooktest", Stats.hookTest) end,
     StatsDump = function() Stats.dumped = false Stats.dumpLayout() end,
-    StatsWhy = function() Task.spawn("stats-why", Stats.why) end,
-    CodesRun = function() Codes.rerun() end,
-    CodesForget = function() Store.set("codes", {}) Log.add("I", "redeemed-codes memory cleared") end,
-    StatsPlan = function()
+    StatsPlan = function()   -- prints what the allocator WOULD do with the current values
         local p, lv = Stats.read()
         if not p and Stats.bind() then p, lv = Stats.read() end
         if not p then print("[BloxSM] stats values not found") return end
@@ -2981,12 +2157,10 @@ if CFG.DEAD_ON_ERROR then
     end)
 end
 
+-- Everything below starts in parallel; nothing blocks the boot (v19 blocked ~12s on the group lock).
+if CFG.STATS.ENABLED and CFG.STATS.DETECT_HOOK then Stats.installHook() end
 Group.acquire()
 Noti.boot()
-if CFG.DMG.ENABLED then
-    pcall(function() S.conns[#S.conns + 1] = game.DescendantAdded:Connect(Dmg.onAdded) end)
-    Task.spawn("dmg-templates", Dmg.disableTemplates)
-end
 Vx.boot()
 Task.service("team", 1, Team.tick)
 Task.service("group-lock", CFG.LOCK_REFRESH, function() Group.refresh() end)
@@ -2995,18 +2169,18 @@ Task.service("webhook-adopt", 60, function() WH.adopt() end)
 Task.service("session-guard", 3, Sess.guard)
 Task.service("dead-watch", 10, Dead.watch)
 Task.service("farm", 3, Farm.tick)
+Task.service("idle-watch", 5, Farm.idleWatch)
 Task.service("hub-watch", 15, Farm.hubWatch)
-Task.service("farm-verify", CFG.IDLE.CHECK, Farm.verify)
-Task.service("cfg-drift", 10, Vx.driftTick)
 Task.service("gacha", 3, Gacha.tick)
 Task.service("sea-guard", 10, Sea.tick)
-Task.service("dmg", 1, Dmg.tick)
 Task.service("stats", 5, Stats.tick)
-Task.service("codes", 5, Codes.tick)
 Task.service("ui", 2, UI.render)
 Task.service("status-file", 15, Watch.statusFile)
 Task.service("watchdog", 15, Watch.tick)
 
+-- Session starter: waits for a character, but only up to START_MAX_WAIT.
+-- WHY: v19 waited forever, so an account stuck on the team screen never got a session or a signal and the scheduler
+-- could not rotate away from it. Starting the clock anyway lets the dead-session logic take over.
 Task.spawn("session-boot", function()
     local t0 = os.clock()
     while S.alive and not hasHRP() and os.clock() - t0 < CFG.START_MAX_WAIT do task.wait(1) end
