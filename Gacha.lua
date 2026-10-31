@@ -38,11 +38,14 @@
 -- 0. CONFIG
 ----------------------------------------------------------------
 local CFG = {
-    VERSION = "v24.1",
+    VERSION = "v24.2",
     WEBHOOKS = { 
         fruit = "https://discord.com/api/webhooks/1561728793226383510/PeYJqeHWViBXqs4M0VowG9xM-zk3Uupk2ta8UtWNUqh_R2IQaPIsxMIgZEXNnbRdJ2CM", 
-        report = "https://discord.com/api/webhooks/1564228949033222204/E2n26s5XvL45E4c6Ylnozwb3cyi03QOyinAcltbcrKyAjzj8bLCGMVeDo4IR3mSeOCwd" 
+        report = "https://discord.com/api/webhooks/1564228949033222204/E2n26s5XvL45E4c6Ylnozwb3cyi03QOyinAcltbcrKyAjzj8bLCGMVeDo4IR3mSeOCwd", 
+        stock = "https://discord.com/api/webhooks/1566063648307421306/6m8CmcNqefeD7b4j4d1BXzd7S1WU73O0w_WkqwB8hK6jaJNZcSiOwGFr-wynYxp3PekU" -- stock channel (empty = stock reporting off)
     },
+    -- v24.2 stock: one Discord message per account, edited in place. Needs its OWN webhook (WEBHOOKS.stock below is read by WH.url).
+    STOCK = { INTERVAL = 480, FIRST_DELAY = 30, STOP_BEFORE = 90 },   -- seconds: report every 8 min, 30s after start, none in the last 90s of a session
     VXEZE_URL       = "https://raw.githubusercontent.com/Dex-Bear/VxezeHubLoader/refs/heads/main/MainHub.lua",
     LEVEL_VXEZE_MIN = 2200,
     -- v24 hub switch. "auto": level < LEVEL_VXEZE_MIN -> BF-Kaitun, otherwise Vxeze. "kaitun" / "vxeze" pin one hub at every level.
@@ -2303,6 +2306,7 @@ function Gacha.roll()
     end
     if got then
         Gacha.fails = 0
+        Gacha.stockDirty = true
         Store.set("lastRoll", os.time())
         Store.set("rolls", Store.data.rolls + 1)
         Store.save(true)
@@ -2327,6 +2331,79 @@ function Gacha.tick()
     if Sess.endAt - os.time() < 5 then return 5 end
     Gacha.roll()
     return 1
+end
+
+----------------------------------------------------------------
+-- 13a. STOCK (v24.2): publish the Chest inventory (fruits) to a Discord webhook
+--   * Only Legendary+ fruits (the same HIGH_TIER list the gacha webhook uses) are published; everything else is skipped.
+--   * Reads CommF_ "getInventory" (fruits stored in the Chest; Gacha.snapshot only sees Backpack/Character tools).
+--   * ONE embed per account, edited in place (PATCH), so the channel never fills up. Message id is kept in a file.
+--   * Cost: one remote call + one HTTP request every CFG.STOCK.INTERVAL seconds, in its own service; also right after a roll.
+----------------------------------------------------------------
+Gacha.stockMsgFile = "BloxStockMsg_" .. UID .. ".txt"
+Gacha.stockNext, Gacha.stockDirty = 0, false
+
+function Gacha.stockFruits()
+    local cf = commF()
+    local ok, inv = pcall(function() return cf and cf:InvokeServer("getInventory") end)
+    if not ok or type(inv) ~= "table" then return nil end
+    local counts = {}
+    for _, it in pairs(inv) do
+        if type(it) == "table" and it.Type == "Blox Fruit" and it.Name and IsHighTier(it.Name) then
+            counts[it.Name] = (counts[it.Name] or 0) + (tonumber(it.Count) or 1)
+        end
+    end
+    local list = {}
+    for n, c in pairs(counts) do list[#list + 1] = { name = n, count = c } end
+    table.sort(list, function(a, b) return a.name < b.name end)
+    return list
+end
+
+function Gacha.stockSend(list)
+    local url = WH.url("stock")
+    local req = (syn and syn.request) or request or http_request
+    if not url or not req then return false end
+    local lines = {}
+    for _, f in ipairs(list) do lines[#lines + 1] = "• " .. f.name .. " x" .. f.count end
+    local desc = (#lines > 0 and table.concat(lines, "\n") or "Tidak ada Legendary+") .. "\n\nUpdate: <t:" .. os.time() .. ":R>"
+    local okb, body = pcall(HttpService.JSONEncode, HttpService, {
+        username = "Fruit Factory",
+        embeds = { { title = "Stock: " .. LP.Name, description = string.sub(desc, 1, 4000), color = 3066993 } },
+    })
+    if not okb then return false end
+    local headers = { ["Content-Type"] = "application/json" }
+    local id = FS.read(Gacha.stockMsgFile)
+    if id and id ~= "" then
+        local ok, res = pcall(req, { Url = url .. "/messages/" .. id, Method = "PATCH", Headers = headers, Body = body })
+        local status = ok and type(res) == "table" and tonumber(res.StatusCode or res.Status) or nil
+        if status == 200 then return true end
+        if status ~= 404 then return false end   -- 404 = message was deleted, fall through and post a new one; anything else = retry later
+    end
+    local ok, res = pcall(req, { Url = url .. "?wait=true", Method = "POST", Headers = headers, Body = body })
+    local status = ok and type(res) == "table" and tonumber(res.StatusCode or res.Status) or nil
+    if status ~= 200 then return false end
+    local okj, j = pcall(HttpService.JSONDecode, HttpService, res.Body or "{}")
+    if okj and type(j) == "table" and j.id then FS.write(Gacha.stockMsgFile, tostring(j.id)) end
+    return true
+end
+
+function Gacha.stockTick()
+    local c = CFG.STOCK
+    if not c or not WH.url("stock") then return 30 end
+    if not Sess.active or Sess.signaledAt or not Team.done() or not hasHRP() then return 5 end
+    local now = os.time()
+    if Gacha.stockNext == 0 then Gacha.stockNext = now + c.FIRST_DELAY end
+    if now < Gacha.stockNext and not Gacha.stockDirty then return 5 end
+    if Sess.endAt - now < c.STOP_BEFORE then return 5 end
+    local list = Gacha.stockFruits()
+    if list and Gacha.stockSend(list) then
+        Gacha.stockDirty, Gacha.stockNext = false, now + c.INTERVAL
+        Log.add("I", "stock: " .. #list .. " fruit type(s) published")
+    else
+        Gacha.stockDirty, Gacha.stockNext = false, now + 60
+        Log.add("W", "stock: report failed, retry in 60s")
+    end
+    return 5
 end
 
 ----------------------------------------------------------------
@@ -3784,6 +3861,7 @@ Task.service("hub-level", 30, Vx.levelWatch)
 Task.service("swap", 5, Swap.tick)
 Task.service("weapon-guard", CFG.KAITUN.GUARD.CHECK, Weapon.tick)
 Task.service("gacha", 3, Gacha.tick)
+Task.service("stock", 5, Gacha.stockTick)
 Task.service("sea-guard", 10, Sea.tick)
 Task.service("dmg", 1, Dmg.tick)
 Task.service("stats", 5, Stats.tick)
