@@ -383,7 +383,11 @@ do -- keep implementation locals out of the main chunk's local-variable budget
     end
 
     function Inventory.isFruit(tool)
-        return tool:IsA("Tool") and tool.Name:find("Fruit", 1, true) ~= nil
+        if not tool:IsA("Tool") then return false end
+        if tool.Name:find("Fruit", 1, true) ~= nil then return true end
+        if tool.ToolTip == "Devil Fruit" then return true end
+        if tool:GetAttribute("OriginalName") ~= nil then return true end
+        return false
     end
 
     function Inventory.scan()
@@ -447,7 +451,7 @@ do -- keep implementation locals out of the main chunk's local-variable budget
         for name, n in pairs(arrivals) do parts[#parts + 1] = name .. " x" .. n end
         if #parts > 0 then
             table.sort(parts)
-            local ok, res = pcall(WH.send, "fruit", "New fruit", LP.Name .. "\n- " .. table.concat(parts, "\n- "), FRUIT_COLOR, FRUIT_PRIO)
+            local ok, res = pcall(WH.send, "stock", "New fruit", LP.Name .. "\n- " .. table.concat(parts, "\n- "), FRUIT_COLOR, FRUIT_PRIO)
             if not ok or res == false then
                 log("webhook enqueue failed, retrying next tick: " .. tostring(res))
                 return
