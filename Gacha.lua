@@ -48,7 +48,7 @@ local CFG = {
     STOCK = { INTERVAL = 480, FIRST_DELAY = 30, STOP_BEFORE = 90 },   -- seconds: report every 8 min, 30s after start, none in the last 90s
     -- v24.4 auto hop: leave the server after DEATHS deaths within DEATH_WINDOW seconds, or OWN_GRACE seconds after another account from OWN_NAMES joined it.
     HOP = { ENABLED = true, DEATHS = 5, DEATH_WINDOW = 600, OWN_GRACE = 30, MIN_GAP = 300, MAX_PER_HOUR = 6, STOP_BEFORE = 180,
-        OWN_NAMES = { "ICHIBPOBIA", "iio9kka", "dkakxnayh", "idijadiajs", "ICHIZPOBIA", "ICHIAPOBIA", "ICHICPOBIA", "ICHIRUMAHBATU", "ICHIDIBAKAR", "Ar1a_vibe65353", "Av_gray29657" } }, of a session
+        OWN_NAMES = { "ICHIBPOBIA", "iio9kka", "dkakxnayh", "idijadiajs", "ICHIZPOBIA", "ICHIAPOBIA", "ICHICPOBIA", "ICHIRUMAHBATU", "ICHIDIBAKAR", "Ar1a_vibe65353", "Av_gray29657" } },
     VXEZE_URL       = "https://raw.githubusercontent.com/Dex-Bear/VxezeHubLoader/refs/heads/main/MainHub.lua",
     LEVEL_VXEZE_MIN = 2200,
     -- v24 hub switch. "auto": level < LEVEL_VXEZE_MIN -> BF-Kaitun, otherwise Vxeze. "kaitun" / "vxeze" pin one hub at every level.
