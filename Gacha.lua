@@ -42,7 +42,7 @@ local CFG = {
     WEBHOOKS = { 
         fruit = "https://discord.com/api/webhooks/1561728793226383510/PeYJqeHWViBXqs4M0VowG9xM-zk3Uupk2ta8UtWNUqh_R2IQaPIsxMIgZEXNnbRdJ2CM", 
         report = "https://discord.com/api/webhooks/1564228949033222204/E2n26s5XvL45E4c6Ylnozwb3cyi03QOyinAcltbcrKyAjzj8bLCGMVeDo4IR3mSeOCwd", 
-        stock = "" -- stock channel (empty = stock reporting off; paused)
+        stock = "https://discord.com/api/webhooks/1566063648307421306/6m8CmcNqefeD7b4j4d1BXzd7S1WU73O0w_WkqwB8hK6jaJNZcSiOwGFr-wynYxp3PekU" -- stock channel
     },
     -- v24.2 stock: one Discord message per account, edited in place. Needs its OWN webhook (WEBHOOKS.stock below is read by WH.url).
     STOCK = { INTERVAL = 480, FIRST_DELAY = 30, STOP_BEFORE = 90 },   -- seconds: report every 8 min, 30s after start, none in the last 90s
@@ -102,8 +102,8 @@ local CFG = {
         FARM_METHOD_WHILE_TRAVEL = nil,  -- e.g. "Level": Select Method Farm used while the account sits in the wrong sea (nil = leave it alone)
         IDLE_BUDGET = 1200,         -- seconds the idle verifier stays quiet while the account is in the wrong sea, afterwards it may mark the session dead
         DIAG_ZQUEST = true,
-        RELOAD_FILE = "BloxFactory.lua",  -- workspace file containing THIS script, used for queue_on_teleport
-        RELOAD_URL = "",            -- alternative: raw https URL of this script, used when RELOAD_FILE does not exist
+        RELOAD_FILE = "",  -- use the GitHub raw URL below for queue_on_teleport
+        RELOAD_URL = "https://raw.githubusercontent.com/ichiinginberkembang/ICHIhub/refs/heads/main/Gacha.lua",            -- raw GitHub source used after teleport
         MARKER = "BloxSeaTravel_",  -- + UID .. ".json": written before an attempt, read after the reload to prove the arrival
     },
     -- v22 damage numbers
@@ -350,6 +350,158 @@ function WH.send(target, title, desc, color, prio)
     WH.dirty = true
     if prio >= 3 then WH.saveOutbox() end
     return true
+end
+
+
+----------------------------------------------------------------
+-- 3A. INVENTORY ARRIVAL TRACKER
+----------------------------------------------------------------
+-- Announces fruit items that newly enter the player's possession (Backpack + equipped).
+-- Uses the existing LP, WH.send and Log.add.
+local Inventory = {}
+local InventoryTracker = {}
+
+do -- keep implementation locals out of the main chunk's local-variable budget
+    local WARMUP        = 45
+    local RETURN_WINDOW = 120
+    local FRUIT_COLOR   = 0x57F287
+    local FRUIT_PRIO    = 1
+
+    local known
+    local gone = {}
+    local firstAt = 0
+    local busy = false
+
+    local function log(msg)
+        pcall(Log.add, "I", "[Inventory] " .. msg)
+    end
+
+    function Inventory.nameOf(tool)
+        local n = tool:GetAttribute("OriginalName")
+        if type(n) == "string" and n ~= "" then return n end
+        return tool.Name
+    end
+
+    function Inventory.isFruit(tool)
+        return tool:IsA("Tool") and tool.Name:find("Fruit", 1, true) ~= nil
+    end
+
+    function Inventory.scan()
+        local counts = {}
+        local function add(container)
+            if not container then return end
+            for _, tool in ipairs(container:GetChildren()) do
+                if Inventory.isFruit(tool) then
+                    local name = Inventory.nameOf(tool)
+                    counts[name] = (counts[name] or 0) + 1
+                end
+            end
+        end
+        add(LP:FindFirstChildOfClass("Backpack"))
+        add(LP.Character)
+        return counts
+    end
+
+    local function diff(cur, now)
+        local arrivals, nextGone = {}, {}
+        for name, g in pairs(gone) do
+            if now - g.t <= RETURN_WINDOW then nextGone[name] = { n = g.n, t = g.t } end
+        end
+        for name, was in pairs(known) do
+            local lost = was - (cur[name] or 0)
+            if lost > 0 then
+                local g = nextGone[name]
+                nextGone[name] = { n = (g and g.n or 0) + lost, t = now }
+            end
+        end
+        for name, have in pairs(cur) do
+            local inc = have - (known[name] or 0)
+            local g = nextGone[name]
+            if inc > 0 and g then
+                local back = math.min(inc, g.n)
+                inc, g.n = inc - back, g.n - back
+                if g.n == 0 then nextGone[name] = nil end
+            end
+            if inc > 0 then arrivals[name] = inc end
+        end
+        return arrivals, nextGone
+    end
+
+    local function step()
+        local cur, now = Inventory.scan(), os.time()
+
+        if known == nil then
+            known, firstAt = cur, now
+            local n = 0
+            for _, c in pairs(cur) do n = n + c end
+            log("baseline: " .. n .. " fruit(s)")
+            return
+        end
+        if now - firstAt < WARMUP then
+            known, gone = cur, {}
+            return
+        end
+
+        local arrivals, nextGone = diff(cur, now)
+        local parts = {}
+        for name, n in pairs(arrivals) do parts[#parts + 1] = name .. " x" .. n end
+        if #parts > 0 then
+            table.sort(parts)
+            local ok, res = pcall(WH.send, "fruit", "New fruit", LP.Name .. "\n- " .. table.concat(parts, "\n- "), FRUIT_COLOR, FRUIT_PRIO)
+            if not ok or res == false then
+                log("webhook enqueue failed, retrying next tick: " .. tostring(res))
+                return
+            end
+            log("new fruit: " .. table.concat(parts, ", "))
+        end
+        known, gone = cur, nextGone
+    end
+
+    function InventoryTracker.tick()
+        if busy then return end
+        busy = true
+        local ok, err = pcall(step)
+        busy = false
+        if not ok then log("tick error: " .. tostring(err)) end
+    end
+
+    function Inventory.dump()
+        local out = {}
+        local function w(s) out[#out + 1] = s; print(s) end
+        local function attrs(inst)
+            local t = {}
+            for k, v in pairs(inst:GetAttributes()) do t[#t + 1] = k .. "=" .. tostring(v) end
+            table.sort(t)
+            return table.concat(t, ",")
+        end
+        local function list(label, container)
+            if not container then w("[" .. label .. "] missing") return end
+            local kids = container:GetChildren()
+            w("[" .. label .. "] " .. #kids .. " child(ren), * = counted as fruit")
+            for i, c in ipairs(kids) do
+                if i > 40 then w("  ...") break end
+                local ok, v = pcall(function() return c.Value end)
+                local tip = c:IsA("Tool") and (" tip=" .. c.ToolTip) or ""
+                w(("  %s %s <%s>%s%s {%s}"):format(Inventory.isFruit(c) and "*" or " ", c.Name, c.ClassName,
+                    ok and v ~= nil and (" = " .. tostring(v):sub(1, 80)) or "", tip, attrs(c)))
+            end
+        end
+
+        w("== Inventory.dump: " .. LP.Name .. " ==")
+        list("Backpack", LP:FindFirstChildOfClass("Backpack"))
+        list("Character", LP.Character)
+        local data = LP:FindFirstChild("Data")
+        list("Data", data)
+        list("Data.Inventory", data and data:FindFirstChild("Inventory"))
+
+        local b, g = {}, {}
+        for name, n in pairs(known or {}) do b[#b + 1] = name .. "=" .. n end
+        for name, e in pairs(gone) do g[#g + 1] = name .. " x" .. e.n end
+        table.sort(b); table.sort(g)
+        w("[Tracker] baseline: " .. (known and (#b > 0 and table.concat(b, ", ") or "(empty)") or "(not started)"))
+        if #g > 0 then w("[Tracker] recently vanished: " .. table.concat(g, ", ")) end
+        return table.concat(out, "\n")
+    end
 end
 
 local function headerGet(h, name)
@@ -3806,6 +3958,7 @@ env.BloxSM = {
     GuardNow = function() return Vx.enforceAll() end,
     StatsHookTest = function() Task.spawn("stats-hooktest", Stats.hookTest) end,
     StatsDump = function() Stats.dumped = false Stats.dumpLayout() end,
+    InventoryDump = function() Inventory.dump() end,
     StatsWhy = function() Task.spawn("stats-why", Stats.why) end,
     CodesRun = function() Codes.rerun() end,
     Hub = function() print(string.format("[BloxSM] hub=%s (%s) mode=%s level=%s url=%s", tostring(Vx.hub), tostring(Vx.hubWhy), tostring(Vx.mode), tostring(Vx.level), tostring(Vx.hub and Vx.url()))) end,
@@ -3876,6 +4029,7 @@ Task.service("sea-guard", 10, Sea.tick)
 Task.service("dmg", 1, Dmg.tick)
 Task.service("stats", 5, Stats.tick)
 Task.service("codes", 5, Codes.tick)
+Task.service("inventory", 30, InventoryTracker.tick)
 Task.service("ui", 2, UI.render)
 -- v24.3 crash recorder: leaves evidence in BloxLog before a client crash / kick (memory trend + the disconnect text).
 function Watch.record()
