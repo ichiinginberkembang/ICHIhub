@@ -38,11 +38,11 @@
 -- 0. CONFIG
 ----------------------------------------------------------------
 local CFG = {
-    VERSION = "v24.2",
+    VERSION = "v24.3",
     WEBHOOKS = { 
         fruit = "https://discord.com/api/webhooks/1561728793226383510/PeYJqeHWViBXqs4M0VowG9xM-zk3Uupk2ta8UtWNUqh_R2IQaPIsxMIgZEXNnbRdJ2CM", 
         report = "https://discord.com/api/webhooks/1564228949033222204/E2n26s5XvL45E4c6Ylnozwb3cyi03QOyinAcltbcrKyAjzj8bLCGMVeDo4IR3mSeOCwd", 
-        stock = "https://discord.com/api/webhooks/1566063648307421306/6m8CmcNqefeD7b4j4d1BXzd7S1WU73O0w_WkqwB8hK6jaJNZcSiOwGFr-wynYxp3PekU" -- stock channel (empty = stock reporting off)
+        stock = "" -- stock channel (empty = stock reporting off; paused)
     },
     -- v24.2 stock: one Discord message per account, edited in place. Needs its OWN webhook (WEBHOOKS.stock below is read by WH.url).
     STOCK = { INTERVAL = 480, FIRST_DELAY = 30, STOP_BEFORE = 90 },   -- seconds: report every 8 min, 30s after start, none in the last 90s of a session
@@ -614,7 +614,7 @@ end
 -- 5. STATE STORE
 ----------------------------------------------------------------
 Store.path = "BloxState_" .. UID .. ".json"
-Store.data = { lastRoll = 0, bootCount = 0, rolls = 0, highTier = 0, codes = {} }   -- codes: per-account redeem results
+Store.data = { lastRoll = 0, bootCount = 0, rolls = 0, highTier = 0, codes = {}, stock = {} }   -- codes: per-account redeem results; stock: fruits this script stored in the Chest {name=count}
 Store.dirty = false
 function Store.set(k, v) Store.data[k] = v Store.dirty = true end
 function Store.load()
@@ -2298,6 +2298,7 @@ function Gacha.roll()
     for _, h in ipairs(highs) do
         UI.status("HIGH TIER: " .. h.name .. " - storing")
         local stored = Gacha.store(h.name, h.tool)
+        if stored then Gacha.ledgerAdd(h.name) end
         Store.set("highTier", Store.data.highTier + 1)
         UI.status(stored and ("Stored in chest: " .. h.name) or ("STORE FAILED: " .. h.name))
         WH.send("fruit", "HIGH TIER OBTAINED",
@@ -2336,25 +2337,31 @@ end
 ----------------------------------------------------------------
 -- 13a. STOCK (v24.2): publish the Chest inventory (fruits) to a Discord webhook
 --   * Only Legendary+ fruits (the same HIGH_TIER list the gacha webhook uses) are published; everything else is skipped.
---   * Reads CommF_ "getInventory" (fruits stored in the Chest; Gacha.snapshot only sees Backpack/Character tools).
+--   * Source = ledger of fruits this script stored in the Chest (see Gacha.ledgerAdd). No remote call needed.
 --   * ONE embed per account, edited in place (PATCH), so the channel never fills up. Message id is kept in a file.
---   * Cost: one remote call + one HTTP request every CFG.STOCK.INTERVAL seconds, in its own service; also right after a roll.
+--   * Cost: one HTTP request every CFG.STOCK.INTERVAL seconds, in its own service; also right after a roll.
 ----------------------------------------------------------------
 Gacha.stockMsgFile = "BloxStockMsg_" .. UID .. ".txt"
 Gacha.stockNext, Gacha.stockDirty = 0, false
 
+-- getInventory / getInventoryFruits return nil on this game version and the inventory UI only fills while a panel is open,
+-- so the published stock is this script's own ledger of fruits it stored in the Chest (Store.data.stock, saved per account).
+function Gacha.ledgerAdd(name)
+    Store.data.stock[name] = (Store.data.stock[name] or 0) + 1
+    Store.dirty = true
+end
+
+function Gacha.ledgerRemove(name)   -- call this from the future trade module after a successful trade
+    local n = (Store.data.stock[name] or 0) - 1
+    Store.data.stock[name] = n > 0 and n or nil
+    Store.dirty = true
+end
+
 function Gacha.stockFruits()
-    local cf = commF()
-    local ok, inv = pcall(function() return cf and cf:InvokeServer("getInventory") end)
-    if not ok or type(inv) ~= "table" then return nil end
-    local counts = {}
-    for _, it in pairs(inv) do
-        if type(it) == "table" and it.Type == "Blox Fruit" and it.Name and IsHighTier(it.Name) then
-            counts[it.Name] = (counts[it.Name] or 0) + (tonumber(it.Count) or 1)
-        end
-    end
     local list = {}
-    for n, c in pairs(counts) do list[#list + 1] = { name = n, count = c } end
+    for n, c in pairs(Store.data.stock) do
+        if c > 0 and IsHighTier(n) then list[#list + 1] = { name = n, count = c } end
+    end
     table.sort(list, function(a, b) return a.name < b.name end)
     return list
 end
@@ -3867,7 +3874,23 @@ Task.service("dmg", 1, Dmg.tick)
 Task.service("stats", 5, Stats.tick)
 Task.service("codes", 5, Codes.tick)
 Task.service("ui", 2, UI.render)
+-- v24.3 crash recorder: leaves evidence in BloxLog before a client crash / kick (memory trend + the disconnect text).
+function Watch.record()
+    local ok, mb = pcall(function() return game:GetService("Stats"):GetTotalMemoryUsageMb() end)
+    if ok then Log.add("I", string.format("rec: mem=%dMB level=%s", math.floor(mb), tostring(Vx.level))) end
+    return 60
+end
+pcall(function()
+    S.conns[#S.conns + 1] = GuiService.ErrorMessageChanged:Connect(function(msg)
+        if msg and msg ~= "" then
+            Log.add("E", "client error message: " .. tostring(msg))
+            Log.flush()
+        end
+    end)
+end)
+
 Task.service("status-file", 15, Watch.statusFile)
+Task.service("recorder", 60, Watch.record)
 Task.service("watchdog", 15, Watch.tick)
 
 Task.spawn("session-boot", function()
