@@ -38,14 +38,17 @@
 -- 0. CONFIG
 ----------------------------------------------------------------
 local CFG = {
-    VERSION = "v24.3",
+    VERSION = "v24.4",
     WEBHOOKS = { 
         fruit = "https://discord.com/api/webhooks/1561728793226383510/PeYJqeHWViBXqs4M0VowG9xM-zk3Uupk2ta8UtWNUqh_R2IQaPIsxMIgZEXNnbRdJ2CM", 
         report = "https://discord.com/api/webhooks/1564228949033222204/E2n26s5XvL45E4c6Ylnozwb3cyi03QOyinAcltbcrKyAjzj8bLCGMVeDo4IR3mSeOCwd", 
         stock = "" -- stock channel (empty = stock reporting off; paused)
     },
     -- v24.2 stock: one Discord message per account, edited in place. Needs its OWN webhook (WEBHOOKS.stock below is read by WH.url).
-    STOCK = { INTERVAL = 480, FIRST_DELAY = 30, STOP_BEFORE = 90 },   -- seconds: report every 8 min, 30s after start, none in the last 90s of a session
+    STOCK = { INTERVAL = 480, FIRST_DELAY = 30, STOP_BEFORE = 90 },   -- seconds: report every 8 min, 30s after start, none in the last 90s
+    -- v24.4 auto hop: leave the server after DEATHS deaths within DEATH_WINDOW seconds, or OWN_GRACE seconds after another account from OWN_NAMES joined it.
+    HOP = { ENABLED = true, DEATHS = 5, DEATH_WINDOW = 600, OWN_GRACE = 30, MIN_GAP = 300, MAX_PER_HOUR = 6, STOP_BEFORE = 180,
+        OWN_NAMES = { "ICHIBPOBIA", "iio9kka", "dkakxnayh", "idijadiajs", "ICHIZPOBIA", "ICHIAPOBIA", "ICHICPOBIA", "ICHIRUMAHBATU", "ICHIDIBAKAR", "Ar1a_vibe65353", "Av_gray29657" } }, of a session
     VXEZE_URL       = "https://raw.githubusercontent.com/Dex-Bear/VxezeHubLoader/refs/heads/main/MainHub.lua",
     LEVEL_VXEZE_MIN = 2200,
     -- v24 hub switch. "auto": level < LEVEL_VXEZE_MIN -> BF-Kaitun, otherwise Vxeze. "kaitun" / "vxeze" pin one hub at every level.
@@ -614,7 +617,7 @@ end
 -- 5. STATE STORE
 ----------------------------------------------------------------
 Store.path = "BloxState_" .. UID .. ".json"
-Store.data = { lastRoll = 0, bootCount = 0, rolls = 0, highTier = 0, codes = {}, stock = {} }   -- codes: per-account redeem results; stock: fruits this script stored in the Chest {name=count}
+Store.data = { lastRoll = 0, bootCount = 0, rolls = 0, highTier = 0, codes = {}, stock = {}, hops = {} }   -- codes: per-account redeem results; stock: fruits this script stored in the Chest {name=count}
 Store.dirty = false
 function Store.set(k, v) Store.data[k] = v Store.dirty = true end
 function Store.load()
@@ -3889,8 +3892,74 @@ pcall(function()
     end)
 end)
 
+-- v24.4 AUTO HOP (attached to Watch: no new top-level local). Leaves the server via a random Teleport of the same place.
+--   Triggers: DEATHS deaths within DEATH_WINDOW, or another account from CFG.HOP.OWN_NAMES sharing the server for OWN_GRACE seconds
+--   (only the account with the HIGHER UserId leaves, so two accounts never hop at the same moment).
+--   Limits: MIN_GAP between hops, MAX_PER_HOUR (timestamps live in Store, because the hop reboots the script), nothing near session end.
+Watch.hopDeaths, Watch.hopOwnSince, Watch.hopNextAt, Watch.hopNames = {}, nil, 0, nil
+
+function Watch.hopOwn()
+    if not Watch.hopNames then
+        Watch.hopNames = {}
+        for _, n in ipairs(CFG.HOP.OWN_NAMES) do Watch.hopNames[string.lower(n)] = true end
+    end
+    for _, p in ipairs(Players:GetPlayers()) do
+        if p ~= LP and Watch.hopNames[string.lower(p.Name)] then return p end
+    end
+end
+
+function Watch.hopNow(reason)
+    local H = CFG.HOP
+    local now = os.time()
+    local recent = {}
+    for _, t in ipairs(Store.data.hops) do if now - t < 3600 then recent[#recent + 1] = t end end
+    Watch.hopNextAt = os.clock() + H.MIN_GAP
+    if #recent >= H.MAX_PER_HOUR then
+        Log.add("W", "hop skipped (" .. reason .. "): hourly cap reached")
+        return false
+    end
+    recent[#recent + 1] = now
+    Store.set("hops", recent)
+    Log.add("W", "hop: " .. reason)
+    WH.send("report", "Server hop", "Account " .. LP.Name .. ": " .. reason, 15105570, 2)
+    Watch.hopDeaths, Watch.hopOwnSince = {}, nil
+    pcall(function() Log.flush() Store.save(true) WH.saveOutbox() end)
+    pcall(function() TeleportService:Teleport(game.PlaceId, LP) end)
+    return true
+end
+
+function Watch.hopTick()
+    local H = CFG.HOP
+    if not H or not H.ENABLED then return 30 end
+    if not Sess.active or Sess.signaledAt or not Team.done() or not hasHRP() or Sea.busy then return 10 end
+    if Sess.endAt - os.time() < H.STOP_BEFORE or os.clock() < Watch.hopNextAt then return 10 end
+    local now = os.clock()
+    local list = Watch.hopDeaths
+    while #list > 0 and now - list[1] > H.DEATH_WINDOW do table.remove(list, 1) end
+    if #list >= H.DEATHS then
+        Watch.hopNow(#list .. " deaths in " .. H.DEATH_WINDOW .. "s")
+        return 10
+    end
+    local other = Watch.hopOwn()
+    if other and LP.UserId > other.UserId then
+        Watch.hopOwnSince = Watch.hopOwnSince or now
+        if now - Watch.hopOwnSince >= H.OWN_GRACE then Watch.hopNow("own account " .. other.Name .. " is in the same server") end
+    else
+        Watch.hopOwnSince = nil
+    end
+    return 10
+end
+
+function Watch.hookDeaths(char)
+    local hum = char:WaitForChild("Humanoid", 10)
+    if hum then hum.Died:Connect(function() Watch.hopDeaths[#Watch.hopDeaths + 1] = os.clock() end) end
+end
+if LP.Character then task.spawn(pcall, Watch.hookDeaths, LP.Character) end
+S.conns[#S.conns + 1] = LP.CharacterAdded:Connect(function(c) task.spawn(pcall, Watch.hookDeaths, c) end)
+
 Task.service("status-file", 15, Watch.statusFile)
 Task.service("recorder", 60, Watch.record)
+Task.service("hop", 10, Watch.hopTick)
 Task.service("watchdog", 15, Watch.tick)
 
 Task.spawn("session-boot", function()
