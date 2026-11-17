@@ -38,7 +38,7 @@
 -- 0. CONFIG
 ----------------------------------------------------------------
 local CFG = {
-    VERSION = "v24.4",
+    VERSION = "v24.5",
     WEBHOOKS = { 
         fruit = "https://discord.com/api/webhooks/1561728793226383510/PeYJqeHWViBXqs4M0VowG9xM-zk3Uupk2ta8UtWNUqh_R2IQaPIsxMIgZEXNnbRdJ2CM", 
         report = "https://discord.com/api/webhooks/1564228949033222204/E2n26s5XvL45E4c6Ylnozwb3cyi03QOyinAcltbcrKyAjzj8bLCGMVeDo4IR3mSeOCwd", 
@@ -164,7 +164,7 @@ local HIGH_TIER = { "dragon","leopard","kitsune","dough","venom","shadow","contr
 local function GetKaitunConfig()
     return { ["Blox Fruits"] = {
         ["Hide UI"] = false, ["Select Weapon"] = "Melee", ["Select Team"] = "Pirates", ["White Screen"] = false, ["Speed Tween"] = 200,
-        ["Lock Fps"] = { ["Enabled"] = true, ["FPS"] = 30 },
+        ["Lock Fps"] = { ["Enabled"] = true, ["FPS"] = 15 },   -- 15 = lowest load for many accounts per device (matches the new hub template)
         ["Get Items"] = { ["Saber"] = true, ["Godhuman"] = true, ["Skull Guitar"] = true, ["Mirror Fractal"] = true,
             ["Cursed Dual Katana"] = true, ["Shark Anchor"] = true },
         ["Get Rare Items"] = { ["Rengoku"] = false, ["Dragon Trident"] = false, ["Pole (1st Form)"] = false, ["Gravity Blade"] = false },
@@ -1409,6 +1409,7 @@ function Vx.boot()
         if hub == "kaitun" then
             cfg, mode, removed = GetKaitunConfig(), "kaitun", 0
             Vx.applyKaitun(cfg, lv)
+            -- new hub template globals: Premium=false (free), FpsBoost=true (drop heavy particles/sounds), Key="" (not needed)
             env.Premium, env.FpsBoost, env.Key = false, true, env.Key or ""
             Vx.snap = nil
         else
@@ -2570,6 +2571,138 @@ function Gacha.stockTick()
         Log.add("W", "stock: report failed, retry in 60s")
     end
     return 5
+end
+
+----------------------------------------------------------------
+-- 13c. STATUS (v24.5): one small JSON per account, read by the Termux dashboard (monitor.py -> tab "Akun")
+--   * File: BloxStatus_<UID>.json in the executor workspace. Written every 30s, plain overwrite, no network.
+--   * ts is the writer's os.time(); the dashboard calls the account "not updating" when it is older than ~2 minutes.
+--   * Read-only on script state: it never changes any config, signal file or session variable.
+----------------------------------------------------------------
+-- Full inventory read straight from the server (CommF_ remote), NOT from logs or a ledger.
+-- Safe by design: only runs once the character is ready, every call has a timeout, failures retry every 2 min, success refreshes every 5 min.
+-- Result shape depends on the game version, so the parser accepts a list of {Name, Count, Type} tables or a name->count map,
+-- and Gacha.invProbe() writes BloxInvProbe_<UID>.txt once per session so the real shape can be checked.
+function Gacha.invoke(cf, name, timeout)
+    local done, ok, res = false, false, nil
+    task.spawn(function()
+        ok, res = pcall(function() return cf:InvokeServer(name) end)
+        done = true
+    end)
+    local t0 = os.clock()
+    while not done and os.clock() - t0 < (timeout or 8) do task.wait(0.2) end
+    if not done then return false, "timeout" end
+    return ok, res
+end
+
+Gacha.inv = { nextAt = 0, at = 0, src = "none", list = nil, err = "belum dibaca" }
+function Gacha.readInventory()
+    local I, now = Gacha.inv, os.time()
+    if now < I.nextAt then return I end
+    local cf = commF()
+    if not cf or not Team.done() or not hasHRP() then I.err = "game belum siap" return I end
+    I.nextAt = now + 120
+    local lastErr = "kosong"
+    for _, name in ipairs({ "getInventory", "getInventoryFruits" }) do
+        local ok, res = Gacha.invoke(cf, name)
+        if ok and type(res) == "table" and next(res) ~= nil then
+            local all, fruitsOnly, typed = {}, {}, false
+            for k, v in pairs(res) do
+                local n, c, t
+                if type(v) == "table" then
+                    n = v.Name or v.name
+                    c = tonumber(v.Count or v.count) or 1
+                    t = tostring(v.Type or v.type or ""):lower()
+                elseif type(k) == "string" and type(v) == "number" then
+                    n, c, t = k, v, ""
+                end
+                if n then
+                    local item = { tostring(n), c, t }
+                    all[#all + 1] = item
+                    if t ~= "" then typed = true end
+                    if t:find("fruit", 1, true) then fruitsOnly[#fruitsOnly + 1] = item end
+                end
+            end
+            local list = typed and fruitsOnly or all
+            table.sort(list, function(a, b) return a[1] < b[1] end)
+            I.list, I.src, I.err, I.at, I.nextAt = list, name, nil, now, now + 300
+            return I
+        end
+        lastErr = name .. ": " .. (ok and type(res) or tostring(res):sub(1, 80))
+    end
+    I.list, I.src, I.err = nil, "none", lastErr
+    return I
+end
+
+function Gacha.invProbe()
+    local out = { "== inventory probe: " .. LP.Name .. " @ " .. os.date("%Y-%m-%d %H:%M:%S") .. " ==" }
+    local cf = commF()
+    if not cf then
+        out[#out + 1] = "CommF_ missing"
+    else
+        for _, name in ipairs({ "getInventory", "getInventoryFruits" }) do
+            local ok, res = Gacha.invoke(cf, name, 10)
+            local n, types = 0, {}
+            if ok and type(res) == "table" then
+                for _, v in pairs(res) do
+                    n = n + 1
+                    if type(v) == "table" and (v.Type or v.type) then types[tostring(v.Type or v.type)] = true end
+                end
+            end
+            local tl = {}
+            for t in pairs(types) do tl[#tl + 1] = t end
+            table.sort(tl)
+            out[#out + 1] = string.format("[%s] ok=%s type=%s entries=%d types={%s}", name, tostring(ok), type(res), n, table.concat(tl, ","))
+            if ok and type(res) == "table" then
+                local shown = 0
+                for k, v in pairs(res) do
+                    if shown >= 4 then break end
+                    shown = shown + 1
+                    local parts = {}
+                    if type(v) == "table" then
+                        for fk, fv in pairs(v) do
+                            if #parts < 12 then parts[#parts + 1] = tostring(fk) .. "=" .. tostring(fv):sub(1, 30) end
+                        end
+                    else
+                        parts[1] = tostring(v)
+                    end
+                    out[#out + 1] = "  " .. tostring(k) .. " -> " .. table.concat(parts, ", ")
+                end
+            elseif not ok then
+                out[#out + 1] = "  error: " .. tostring(res):sub(1, 120)
+            end
+        end
+    end
+    FS.write("BloxInvProbe_" .. UID .. ".txt", table.concat(out, "\n"))
+end
+
+function Gacha.statusTick()
+    if not FS.ok() then return false end
+    -- fruits = Chest ledger (every fruit this script stored, all tiers); bag = fruits in the Backpack / held right now
+    local fruits, bag = {}, {}
+    local okf, st = pcall(function() return Store.data.stock end)
+    if okf and type(st) == "table" then
+        for n, c in pairs(st) do if c > 0 then fruits[#fruits + 1] = { n, c } end end
+        table.sort(fruits, function(a, b) return a[1] < b[1] end)
+    end
+    local okb, cur = pcall(Inventory.scan)
+    if okb and type(cur) == "table" then
+        for n, c in pairs(cur) do bag[#bag + 1] = { n, c } end
+        table.sort(bag, function(a, b) return a[1] < b[1] end)
+    end
+    local iv = Gacha.readInventory()
+    if not Gacha.invProbed and Team.done() and hasHRP() then Gacha.invProbed = true Task.spawn("inv-probe", Gacha.invProbe) end
+    local okl, lv = pcall(Vx.readLevel)
+    local state = "idle"
+    if Dead.reason then state = "dead"
+    elseif Sess.signaledAt then state = "ending"
+    elseif Sess.active then state = "farming" end
+    local left = (Sess.active and Sess.endAt) and math.max(0, Sess.endAt - os.time()) or 0
+    FS.writeJSON("BloxStatus_" .. UID .. ".json", {
+        user = LP.Name, uid = UID, level = okl and lv or nil, beli = Gacha.getBeli(), sea = Sea.cur, hub = Vx.hub,
+        group = Group.id, state = state, left = left, fruits = fruits, bag = bag, inv = iv.list, inv_src = iv.src, inv_err = iv.err, inv_at = iv.at, ver = CFG.VERSION, ts = os.time(),
+    })
+    return 60
 end
 
 ----------------------------------------------------------------
@@ -4029,6 +4162,7 @@ Task.service("swap", 5, Swap.tick)
 Task.service("weapon-guard", CFG.KAITUN.GUARD.CHECK, Weapon.tick)
 Task.service("gacha", 3, Gacha.tick)
 Task.service("stock", 5, Gacha.stockTick)
+Task.service("status", 60, Gacha.statusTick)
 Task.service("sea-guard", 10, Sea.tick)
 Task.service("dmg", 1, Dmg.tick)
 Task.service("stats", 5, Stats.tick)
